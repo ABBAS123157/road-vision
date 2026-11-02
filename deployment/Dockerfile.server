@@ -18,3 +18,4 @@ ENV MONGODB_URI=mongodb://mongodb:27017/roadvision
 ENV PYTHON_BACKEND_URL=http://backend:8000
 
 CMD ["node", "src/index.js"]
+

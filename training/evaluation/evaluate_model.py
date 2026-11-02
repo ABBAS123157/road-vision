@@ -16,3 +16,4 @@ def evaluate(weights_path="backend/app/ai/yolov8n.pt", data_config="training/con
 
 if __name__ == "__main__":
     evaluate()
+

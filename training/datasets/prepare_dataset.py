@@ -22,3 +22,4 @@ def create_dataset_structure(output_dir="training/datasets/roadvision_data"):
 
 if __name__ == "__main__":
     create_dataset_structure()
+

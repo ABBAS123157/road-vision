@@ -139,3 +139,4 @@ The assistant announces events with a 7-second cooldown to avoid repetitive spam
 - **Critical Danger:** *"Danger! Obstacle detected. Stop immediately."*
 - **Road Clear:** *"Path clear. Safe to proceed."*
 - **Recording Status:** *"Automatic road detection video recording started."*
+
