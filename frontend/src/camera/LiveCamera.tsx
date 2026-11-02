@@ -18,16 +18,32 @@ import {
   RefreshCw,
   Info,
   CheckCircle2,
-  XCircle
+  XCircle,
+  MapPin,
+  Compass,
+  Radio,
+  Square,
+  Play,
+  Download,
+  Mic,
+  MicOff,
+  Sparkles,
+  Navigation
 } from 'lucide-react';
-import { DetectionItem, LiveDetectionResponse } from '../services/api';
-import { audioAlerts } from '../services/audio';
+import { api, DetectionItem, LiveDetectionResponse } from '../services/api';
+import { voiceAssistant, SUPPORTED_LANGUAGES } from '../services/voiceAssistant';
 
 interface LiveCameraProps {
   onSnapshotCaptured?: (dataUrl: string, detections: DetectionItem[]) => void;
+  onOpenVideos?: () => void;
+  onOpenMap?: () => void;
 }
 
-export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) => {
+export const LiveCamera: React.FC<LiveCameraProps> = ({
+  onSnapshotCaptured,
+  onOpenVideos,
+  onOpenMap
+}) => {
   // Video and Canvas refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -42,7 +58,6 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [isMuted, setIsMuted] = useState<boolean>(audioAlerts.getMuted());
 
   // AI & Detection Telemetry
   const [fps, setFps] = useState<number>(0);
@@ -54,7 +69,7 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [capturedFlash, setCapturedFlash] = useState<boolean>(false);
 
-  // Counts
+  // Object Counts
   const [counts, setCounts] = useState({
     vehicles: 0,
     pedestrians: 0,
@@ -63,10 +78,35 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     total: 0
   });
 
-  // GPS state for saving detections
-  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  // GPS State (Phase 3)
+  const [gpsWatchId, setGpsWatchId] = useState<number | null>(null);
+  const [gpsActive, setGpsActive] = useState<boolean>(true);
+  const [gpsCoords, setGpsCoords] = useState<{
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    speed: number | null;
+    heading: number | null;
+    altitude: number | null;
+    timestamp: string;
+  } | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Track previous prestart status to trigger audio on change
+  // Video Recording State (Phase 5)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
+  const [recordingTrigger, setRecordingTrigger] = useState<'manual' | 'auto_hazard'>('manual');
+  const recordingTimerRef = useRef<any>(null);
+  const [savingNotice, setSavingNotice] = useState<string | null>(null);
+
+  // Voice Assistant State (Phase 11)
+  const [isListening, setIsListening] = useState<boolean>(false);
+  const [voiceTranscript, setVoiceTranscript] = useState<string>('');
+
+  // Track previous detections to detect persons entering/leaving view (Phase 7)
+  const prevTrackedPersonsRef = useRef<Set<number>>(new Set());
   const prevPrestartRef = useRef<string>('SAFE TO PROCEED');
 
   // Enumerate camera devices
@@ -87,26 +127,87 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     }
   }, [selectedDeviceId]);
 
+  // ==========================================
+  // PHASE 3: Real-Time Device GPS Location
+  // ==========================================
+  const startGpsTracking = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      setGpsError('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setGpsError(null);
+    setGpsActive(true);
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const coords = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          speed: position.coords.speed,
+          heading: position.coords.heading,
+          altitude: position.coords.altitude,
+          timestamp: new Date(position.timestamp).toLocaleTimeString()
+        };
+        setGpsCoords(coords);
+        setGpsError(null);
+
+        // Sync GPS coordinates to MongoDB
+        api.sendGpsUpdate({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          altitude: coords.altitude ?? undefined,
+          accuracy: coords.accuracy ?? undefined,
+          speed: coords.speed ?? undefined,
+          heading: coords.heading ?? undefined
+        }).catch(() => {});
+      },
+      (err) => {
+        console.warn('Geolocation watch error:', err.message);
+        if (err.code === 1) {
+          setGpsError('GPS permission denied. Please allow location access in your browser.');
+        } else if (err.code === 2) {
+          setGpsError('GPS position unavailable. Check device GPS service.');
+        } else {
+          setGpsError('GPS signal timed out. Acquiring satellite fix...');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 1000
+      }
+    );
+
+    setGpsWatchId(watchId);
+  }, []);
+
+  const stopGpsTracking = () => {
+    if (gpsWatchId !== null) {
+      navigator.geolocation.clearWatch(gpsWatchId);
+      setGpsWatchId(null);
+    }
+    setGpsActive(false);
+  };
+
   useEffect(() => {
     updateDeviceList();
     navigator.mediaDevices?.addEventListener('devicechange', updateDeviceList);
-
-    // Watch GPS location if user consented
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        pos => setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        err => console.log('Geolocation note:', err.message),
-        { enableHighAccuracy: true, timeout: 5000 }
-      );
-    }
+    startGpsTracking();
 
     return () => {
       navigator.mediaDevices?.removeEventListener('devicechange', updateDeviceList);
       stopCamera();
+      if (gpsWatchId !== null) {
+        navigator.geolocation.clearWatch(gpsWatchId);
+      }
     };
   }, []);
 
-  // Initialize or connect WebSocket
+  // ==========================================
+  // PHASE 4: Real-Time WebSocket for YOLO Inference
+  // ==========================================
   const connectWebSocket = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       return;
@@ -120,7 +221,6 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-      console.log('[RoadVision AI] WebSocket connected');
       setWsStatus('connected');
       setCameraError(null);
     };
@@ -145,22 +245,55 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
           setPrestartReasons(data.prestart_details.reasons || []);
         }
 
-        // Trigger Audio Chime & Speech when status changes
+        // ==========================================
+        // PHASE 7: Person & Vehicle Tracking Events
+        // ==========================================
+        const currentPersonIds = new Set<number>();
+        (data.detections || []).forEach(d => {
+          if (d.category === 'Pedestrian' && d.tracking_id) {
+            currentPersonIds.add(d.tracking_id);
+            if (!prevTrackedPersonsRef.current.has(d.tracking_id)) {
+              // Person entered view
+              api.recordDetectionEvent({
+                event_type: 'PERSON_ENTERED_VIEW',
+                object_label: 'Pedestrian',
+                confidence: d.confidence,
+                tracking_id: d.tracking_id,
+                gps_lat: gpsCoords?.latitude,
+                gps_lng: gpsCoords?.longitude,
+                severity: d.danger_level === 'Danger Zone' ? 'danger' : 'info'
+              }).catch(() => {});
+            }
+          }
+        });
+        prevTrackedPersonsRef.current = currentPersonIds;
+
+        // ==========================================
+        // PHASE 11: Multilingual Voice Alert Announcements
+        // ==========================================
+        if (data.pedestrians_count > 0) {
+          voiceAssistant.speak('person_detected');
+        } else if (data.potholes_count > 0) {
+          voiceAssistant.speak('pothole_detected');
+          if (!isRecording && data.potholes_count > 0) {
+            triggerAutoEventRecording();
+          }
+        } else if (data.vehicles_count > 0) {
+          voiceAssistant.speak('vehicle_detected');
+        }
+
         if (newPrestart !== prevPrestartRef.current) {
           if (newPrestart === 'STOP – DANGER DETECTED') {
-            audioAlerts.playAlertBeep('critical');
-            audioAlerts.speak('Warning! Stop. Danger detected in path.');
+            voiceAssistant.speak('danger_stop', undefined, true);
           } else if (newPrestart === 'CAUTION') {
-            audioAlerts.playAlertBeep('warning');
-            audioAlerts.speak('Caution. Surrounding traffic or road defect nearby.');
+            voiceAssistant.speak('caution', undefined, true);
           } else if (newPrestart === 'SAFE TO PROCEED' && prevPrestartRef.current !== 'SAFE TO PROCEED') {
-            audioAlerts.playAlertBeep('success');
-            audioAlerts.speak('Forward road clear. Safe to proceed.');
+            voiceAssistant.speak('safe_proceed', undefined, true);
           }
           prevPrestartRef.current = newPrestart;
         }
 
-        // Draw bounding boxes on canvas
+        // Draw Bounding Boxes on Canvas Overlay
         drawBoundingBoxes(data.detections || []);
       } catch (err) {
         console.error('Error handling WebSocket message:', err);
@@ -168,35 +301,37 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     };
 
     ws.onerror = (err) => {
-      console.warn('[RoadVision AI] WebSocket error:', err);
+      console.warn('WebSocket error:', err);
       setWsStatus('disconnected');
     };
 
     ws.onclose = () => {
-      console.log('[RoadVision AI] WebSocket closed');
       setWsStatus('disconnected');
     };
 
     wsRef.current = ws;
-  }, []);
+  }, [gpsCoords, isRecording]);
 
-  // Start Camera
-  const startCamera = async (targetDeviceId?: string, targetFacing?: 'user' | 'environment') => {
+  // ==========================================
+  // PHASE 2: Live Device Camera Start / Stop
+  // ==========================================
+  const startCamera = async (deviceId?: string, facing?: 'user' | 'environment') => {
     setCameraError(null);
+    stopCamera();
+
+    const targetFacing = facing || facingMode;
+    const constraints: MediaStreamConstraints = {
+      audio: false,
+      video: deviceId
+        ? { deviceId: { exact: deviceId } }
+        : {
+            facingMode: { ideal: targetFacing },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+    };
+
     try {
-      // Release existing tracks
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-
-      const activeFacing = targetFacing || facingMode;
-      const constraints: MediaStreamConstraints = {
-        audio: false,
-        video: targetDeviceId
-          ? { deviceId: { exact: targetDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
-          : { facingMode: { ideal: activeFacing }, width: { ideal: 1280 }, height: { ideal: 720 } }
-      };
-
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
 
@@ -209,15 +344,14 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
       await updateDeviceList();
       connectWebSocket();
       startFrameStreaming();
-      audioAlerts.playAlertBeep('info');
     } catch (err: any) {
       console.error('Failed to start camera:', err);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setCameraError('Camera access denied. Please grant camera permission in your browser address bar.');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        setCameraError('No camera found on this device. Please connect an external USB webcam.');
+        setCameraError('No camera found on this device. Please connect a webcam.');
       } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-        setCameraError('Camera is currently in use by another application. Please close other camera apps and retry.');
+        setCameraError('Camera is in use by another application. Please close other camera apps and retry.');
       } else {
         setCameraError(`Camera error: ${err.message || 'Unable to access camera.'}`);
       }
@@ -225,7 +359,6 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     }
   };
 
-  // Stop Camera
   const stopCamera = () => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
@@ -245,10 +378,12 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
       wsRef.current.close();
       wsRef.current = null;
     }
-    // Clear canvas overlay
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext('2d');
       ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
+    if (isRecording) {
+      stopRecording();
     }
 
     setIsCameraActive(false);
@@ -258,7 +393,6 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     setLatencyMs(0);
   };
 
-  // Switch between front and rear cameras (Mobile support)
   const switchCameraFacing = async () => {
     const newFacing = facingMode === 'environment' ? 'user' : 'environment';
     setFacingMode(newFacing);
@@ -267,7 +401,6 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     }
   };
 
-  // Device dropdown selection
   const handleDeviceChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const deviceId = e.target.value;
     setSelectedDeviceId(deviceId);
@@ -276,51 +409,158 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     }
   };
 
-  // Capture Image
-  const captureSnapshot = () => {
-    if (!videoRef.current) return;
-    const video = videoRef.current;
-    const captureCanvas = document.createElement('canvas');
-    captureCanvas.width = video.videoWidth || 640;
-    captureCanvas.height = video.videoHeight || 480;
-    const ctx = captureCanvas.getContext('2d');
-    if (!ctx) return;
+  // ==========================================
+  // PHASE 5: Automatic & Manual Road Video Recording
+  // ==========================================
+  const startRecording = (trigger: 'manual' | 'auto_hazard' = 'manual') => {
+    if (!streamRef.current || isRecording) return;
 
-    // Draw video frame
-    ctx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+    try {
+      recordedChunksRef.current = [];
+      const mimeTypes = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+      let selectedMime = mimeTypes.find(type => MediaRecorder.isTypeSupported(type)) || 'video/webm';
 
-    // Flash animation
-    setCapturedFlash(true);
-    setTimeout(() => setCapturedFlash(false), 200);
-    audioAlerts.playAlertBeep('info');
+      const recorder = new MediaRecorder(streamRef.current, { mimeType: selectedMime });
 
-    const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
-    if (onSnapshotCaptured) {
-      onSnapshotCaptured(dataUrl, detections);
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(recordedChunksRef.current, { type: selectedMime });
+        if (blob.size < 5000) return;
+
+        setSavingNotice('Uploading video & indexing telemetry in MongoDB...');
+        try {
+          let thumbDataUrl = '';
+          if (videoRef.current) {
+            const thumbCanvas = document.createElement('canvas');
+            thumbCanvas.width = 320;
+            thumbCanvas.height = 180;
+            const tctx = thumbCanvas.getContext('2d');
+            tctx?.drawImage(videoRef.current, 0, 0, 320, 180);
+            thumbDataUrl = thumbCanvas.toDataURL('image/jpeg', 0.8);
+          }
+
+          const formData = new FormData();
+          formData.append('video', blob, `road_monitoring_${Date.now()}.mp4`);
+          formData.append('duration', recordingSeconds.toString());
+          formData.append('trigger_event', trigger);
+          if (gpsCoords) {
+            formData.append('gps_lat', gpsCoords.latitude.toString());
+            formData.append('gps_lng', gpsCoords.longitude.toString());
+            formData.append('gps_accuracy', (gpsCoords.accuracy || 0).toString());
+          }
+          formData.append('detected_objects', JSON.stringify(detections));
+          formData.append('detection_summary', `${counts.vehicles} vehicles, ${counts.pedestrians} pedestrians, ${counts.hazards} defects`);
+          if (thumbDataUrl) {
+            formData.append('thumbnail_base64', thumbDataUrl);
+          }
+
+          await api.uploadRoadVideo(formData);
+          setSavingNotice('✓ Road detection video saved in MongoDB!');
+          voiceAssistant.speak('recording_stopped', undefined, true);
+          setTimeout(() => setSavingNotice(null), 3000);
+        } catch (err: any) {
+          setSavingNotice(`Save error: ${err.message}`);
+          setTimeout(() => setSavingNotice(null), 4000);
+        }
+      };
+
+      recorder.start(1000);
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setRecordingTrigger(trigger);
+      setRecordingSeconds(0);
+      voiceAssistant.speak('recording_started', undefined, true);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(prev => prev + 1);
+      }, 1000);
+    } catch (e: any) {
+      console.error('MediaRecorder start error:', e);
+      setCameraError('Recording failed: ' + e.message);
     }
   };
 
-  // Toggle Fullscreen
-  const toggleFullscreen = () => {
-    if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(err => {
-        console.warn('Fullscreen request failed:', err);
-      });
-      setIsFullscreen(true);
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current = null;
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setIsRecording(false);
+  };
+
+  const triggerAutoEventRecording = () => {
+    if (isRecording) return;
+    startRecording('auto_hazard');
+    setTimeout(() => {
+      if (isRecording) {
+        stopRecording();
+      }
+    }, 10000);
+  };
+
+  // ==========================================
+  // PHASE 11: Multilingual Voice Command Handler
+  // ==========================================
+  const toggleVoiceListening = () => {
+    if (isListening) {
+      voiceAssistant.stopListening();
+      setIsListening(false);
+      setVoiceTranscript('');
     } else {
-      document.exitFullscreen().catch(err => {
-        console.warn('Exit fullscreen failed:', err);
-      });
-      setIsFullscreen(false);
+      const started = voiceAssistant.startListening(
+        (text, isFinal) => {
+          setVoiceTranscript(text);
+          if (isFinal) {
+            setTimeout(() => setVoiceTranscript(''), 4000);
+          }
+        },
+        (command) => {
+          handleVoiceCommand(command);
+        }
+      );
+      setIsListening(started);
     }
   };
 
-  // Stream frames to WebSocket with dynamic throttling (~10 FPS)
+  const handleVoiceCommand = (command: string) => {
+    switch (command) {
+      case 'START_CAMERA':
+        if (!isCameraActive) startCamera();
+        break;
+      case 'STOP_CAMERA':
+        if (isCameraActive) stopCamera();
+        break;
+      case 'START_RECORDING':
+        if (isCameraActive && !isRecording) startRecording('manual');
+        break;
+      case 'STOP_RECORDING':
+        if (isRecording) stopRecording();
+        break;
+      case 'SHOW_LOCATION':
+        if (onOpenMap) onOpenMap();
+        break;
+      case 'OPEN_VIDEOS':
+        if (onOpenVideos) onOpenVideos();
+        break;
+      default:
+        break;
+    }
+  };
+
+  // Stream video frames to WebSocket
   const startFrameStreaming = () => {
     let lastSent = 0;
     const captureCanvas = document.createElement('canvas');
-    captureCanvas.width = 480; // Optimized resolution for low-latency YOLO inference
+    captureCanvas.width = 480;
     captureCanvas.height = 360;
     const captureCtx = captureCanvas.getContext('2d');
 
@@ -333,15 +573,14 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
         wsRef.current &&
         wsRef.current.readyState === WebSocket.OPEN
       ) {
-        // Send every ~90ms (~11 FPS) to maintain real-time responsiveness without network bloat
         if (now - lastSent >= 90) {
           captureCtx?.drawImage(videoRef.current, 0, 0, 480, 360);
           const base64Data = captureCanvas.toDataURL('image/jpeg', 0.65);
           const payload = {
             image: base64Data,
-            latitude: gpsCoords?.lat,
-            longitude: gpsCoords?.lng,
-            user_id: 1
+            latitude: gpsCoords?.latitude,
+            longitude: gpsCoords?.longitude,
+            user_id: api.getStoredUser()?.id || 'guest'
           };
           wsRef.current.send(JSON.stringify(payload));
           lastSent = now;
@@ -353,401 +592,404 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({ onSnapshotCaptured }) =>
     animationFrameRef.current = requestAnimationFrame(sendLoop);
   };
 
-  // Canvas Bounding Box Renderer
-  const drawBoundingBoxes = (items: DetectionItem[]) => {
+  // Draw Bounding Boxes on Overlay
+  const drawBoundingBoxes = (dets: DetectionItem[]) => {
     if (!canvasRef.current || !videoRef.current) return;
     const canvas = canvasRef.current;
     const video = videoRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Synchronize canvas coordinate resolution with video
-    const vw = video.videoWidth || 640;
-    const vh = video.videoHeight || 480;
-    if (canvas.width !== vw || canvas.height !== vh) {
-      canvas.width = vw;
-      canvas.height = vh;
-    }
-
+    canvas.width = video.clientWidth;
+    canvas.height = video.clientHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const scaleX = vw / 480;
-    const scaleY = vh / 360;
+    const scaleX = canvas.width / (video.videoWidth || 640);
+    const scaleY = canvas.height / (video.videoHeight || 480);
 
-    items.forEach(det => {
-      const [origX1, origY1, origX2, origY2] = det.box;
-      const x1 = origX1 * scaleX;
-      const y1 = origY1 * scaleY;
-      const x2 = origX2 * scaleX;
-      const y2 = origY2 * scaleY;
-      const boxW = x2 - x1;
-      const boxH = y2 - y1;
+    dets.forEach(det => {
+      const [x1, y1, x2, y2] = det.box;
+      const bx = x1 * scaleX;
+      const by = y1 * scaleY;
+      const bw = (x2 - x1) * scaleX;
+      const bh = (y2 - y1) * scaleY;
 
-      // Color scheme based on category
-      let strokeColor = '#3B82F6'; // Blue
-      let fillColor = 'rgba(59, 130, 246, 0.15)';
-      if (det.category === 'Pedestrian') {
-        strokeColor = '#FBBF24'; // Yellow
-        fillColor = 'rgba(251, 191, 36, 0.2)';
-      } else if (det.category === 'Road Damage') {
-        strokeColor = '#EF4444'; // Red
-        fillColor = 'rgba(239, 68, 68, 0.25)';
-      } else if (det.category === 'Emergency Vehicle') {
-        strokeColor = '#EC4899'; // Pink / Magenta
-        fillColor = 'rgba(236, 72, 153, 0.25)';
-      } else if (det.category === 'Safety Gear') {
-        strokeColor = '#10B981'; // Green
-        fillColor = 'rgba(16, 185, 129, 0.2)';
-      }
-
-      if (det.danger_level === 'Danger Zone' || det.is_wrong_way) {
-        strokeColor = '#DC2626';
-        fillColor = 'rgba(220, 38, 38, 0.35)';
-      }
+      let color = '#06b6d4'; // cyan default
+      if (det.category === 'Pedestrian') color = '#22c55e'; // green
+      if (det.category === 'Road Damage') color = '#ef4444'; // red
+      if (det.category === 'Vehicle') color = '#3b82f6'; // blue
+      if (det.danger_level === 'Danger Zone' || det.danger_level === 'Critical') color = '#dc2626';
 
       // Draw box
       ctx.lineWidth = 2.5;
-      ctx.strokeStyle = strokeColor;
-      ctx.fillStyle = fillColor;
-      ctx.beginPath();
-      ctx.rect(x1, y1, boxW, boxH);
-      ctx.stroke();
-      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.strokeRect(bx, by, bw, bh);
 
-      // Corner accent brackets
-      const corner = Math.min(12, boxW / 4, boxH / 4);
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      // Top-Left
-      ctx.moveTo(x1, y1 + corner);
-      ctx.lineTo(x1, y1);
-      ctx.lineTo(x1 + corner, y1);
-      // Top-Right
-      ctx.moveTo(x2 - corner, y1);
-      ctx.lineTo(x2, y1);
-      ctx.lineTo(x2, y1 + corner);
-      // Bottom-Left
-      ctx.moveTo(x1, y2 - corner);
-      ctx.lineTo(x1, y2);
-      ctx.lineTo(x1 + corner, y2);
-      // Bottom-Right
-      ctx.moveTo(x2 - corner, y2);
-      ctx.lineTo(x2, y2);
-      ctx.lineTo(x2, y2 - corner);
-      ctx.stroke();
+      // Label tag with Tracking ID
+      const labelText = `${det.label}${det.tracking_id ? ` #${det.tracking_id}` : ''} ${Math.round(det.confidence * 100)}%`;
+      ctx.font = 'bold 11px sans-serif';
+      const textWidth = ctx.measureText(labelText).width;
 
-      // Label background & text
-      let caption = `${det.tracking_id ? '#' + det.tracking_id + ' ' : ''}${det.label} ${Math.round(det.confidence * 100)}%`;
-      if (det.speed_kmh && det.speed_kmh > 0) {
-        caption += ` | ${det.speed_kmh}km/h`;
-      }
-      if (det.is_wrong_way) {
-        caption += ' [WRONG WAY]';
-      }
-
-      ctx.font = 'bold 12px Inter, sans-serif';
-      const textWidth = ctx.measureText(caption).width;
-      const textHeight = 16;
-
-      ctx.fillStyle = strokeColor;
-      ctx.fillRect(x1, Math.max(0, y1 - textHeight - 4), textWidth + 10, textHeight + 4);
-
-      ctx.fillStyle = '#000000';
-      ctx.fillText(caption, x1 + 5, Math.max(12, y1 - 4));
+      ctx.fillStyle = color;
+      ctx.fillRect(bx, Math.max(0, by - 18), textWidth + 8, 18);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(labelText, bx + 4, Math.max(12, by - 5));
     });
+  };
+
+  const captureSnapshot = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const captureCanvas = document.createElement('canvas');
+    captureCanvas.width = video.videoWidth || 640;
+    captureCanvas.height = video.videoHeight || 480;
+    const ctx = captureCanvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+    setCapturedFlash(true);
+    setTimeout(() => setCapturedFlash(false), 200);
+
+    const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
+    if (onSnapshotCaptured) {
+      onSnapshotCaptured(dataUrl, detections);
+    }
+  };
+
+  const formatRecordingTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
   return (
     <div className="space-y-4">
-      {/* Pre-Start Safety Advisory Banner */}
-      <div
-        className={`p-4 rounded-xl border flex flex-col md:flex-row items-center justify-between gap-3 shadow-lg transition-all duration-300 ${
-          prestartStatus === 'STOP – DANGER DETECTED'
-            ? 'bg-red-950/80 border-red-500 text-red-200 animate-pulse'
-            : prestartStatus === 'CAUTION'
-            ? 'bg-amber-950/70 border-amber-500 text-amber-200'
-            : 'bg-emerald-950/70 border-emerald-500 text-emerald-200'
-        }`}
-      >
-        <div className="flex items-center gap-3">
-          {prestartStatus === 'STOP – DANGER DETECTED' && <ShieldAlert className="w-8 h-8 text-red-400 shrink-0 animate-bounce" />}
-          {prestartStatus === 'CAUTION' && <AlertTriangle className="w-8 h-8 text-amber-400 shrink-0" />}
-          {prestartStatus === 'SAFE TO PROCEED' && <ShieldCheck className="w-8 h-8 text-emerald-400 shrink-0" />}
+      {/* Top Banner & Control Strip */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 md:p-5 shadow-xl flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center space-x-3">
+          <div className="p-2.5 bg-gradient-to-tr from-cyan-600 to-blue-600 rounded-xl shadow-lg">
+            <Camera className="w-5 h-5 text-white" />
+          </div>
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs uppercase tracking-wider font-semibold opacity-75">Pre-Start Advisory:</span>
-              <span className="font-black text-lg tracking-wide">{prestartStatus}</span>
-            </div>
-            {prestartReasons.length > 0 && (
-              <p className="text-xs opacity-90 mt-0.5 line-clamp-1">{prestartReasons[0]}</p>
-            )}
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              Live AI Road Camera & Object Detection
+              {isCameraActive && (
+                <span className="flex h-2.5 w-2.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                </span>
+              )}
+            </h2>
+            <p className="text-xs text-slate-400">
+              YOLO real-time object tracking, live GPS coordinates & automatic event video recording
+            </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        {/* Action Buttons */}
+        <div className="flex items-center flex-wrap gap-2">
+          {/* Microphone Voice Input Button */}
           <button
-            onClick={() => {
-              const muted = audioAlerts.toggleMute();
-              setIsMuted(muted);
-            }}
-            className={`p-2 rounded-lg border text-xs flex items-center gap-1.5 transition ${
-              isMuted ? 'bg-slate-800 border-slate-700 text-slate-400' : 'bg-blue-600/30 border-blue-500 text-blue-300'
+            type="button"
+            onClick={toggleVoiceListening}
+            className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-all ${
+              isListening
+                ? 'bg-red-600 text-white animate-pulse shadow-lg shadow-red-600/30'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
             }`}
-            title="Toggle audio voice & chimes"
+            title={isListening ? 'Stop Listening' : 'Start Voice Commands'}
           >
-            {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            <span>{isMuted ? 'Muted' : 'Voice On'}</span>
+            {isListening ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4 text-slate-400" />}
+            <span>{isListening ? 'Listening...' : 'Voice Command'}</span>
           </button>
+
+          {/* Device Camera Switching (Mobile front/rear) */}
+          <button
+            type="button"
+            onClick={switchCameraFacing}
+            disabled={!isCameraActive}
+            className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-slate-700 rounded-xl text-slate-300 transition-all"
+            title="Switch Front/Rear Camera"
+          >
+            <SwitchCamera className="w-4 h-4" />
+          </button>
+
+          {/* Start / Stop Camera Button */}
+          {!isCameraActive ? (
+            <button
+              type="button"
+              onClick={() => startCamera()}
+              className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-emerald-600/20 flex items-center space-x-2 transition-all"
+            >
+              <Camera className="w-4 h-4" />
+              <span>Start Camera</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={stopCamera}
+              className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-red-600/20 flex items-center space-x-2 transition-all"
+            >
+              <VideoOff className="w-4 h-4" />
+              <span>Stop Camera</span>
+            </button>
+          )}
+
+          {/* Manual Start / Stop Recording Button */}
+          {isCameraActive && (
+            !isRecording ? (
+              <button
+                type="button"
+                onClick={() => startRecording('manual')}
+                className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-semibold shadow-lg flex items-center space-x-2 transition-all"
+              >
+                <Radio className="w-4 h-4 text-red-400" />
+                <span>Start Recording</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={stopRecording}
+                className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-semibold shadow-lg flex items-center space-x-2 animate-pulse"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Stop Recording ({formatRecordingTime(recordingSeconds)})</span>
+              </button>
+            )
+          )}
         </div>
       </div>
 
-      {/* Camera Viewport & Overlay Container */}
+      {/* Voice Transcript Toast */}
+      {voiceTranscript && (
+        <div className="p-2.5 bg-cyan-950/80 border border-cyan-500/50 rounded-xl text-xs text-cyan-200 flex items-center space-x-2 animate-fadeIn">
+          <Sparkles className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+          <span>Recognized speech: <strong>"{voiceTranscript}"</strong></span>
+        </div>
+      )}
+
+      {/* Saving Notice */}
+      {savingNotice && (
+        <div className="p-3 bg-purple-950/80 border border-purple-500/50 rounded-xl text-xs text-purple-200 flex items-center space-x-2">
+          <RefreshCw className="w-4 h-4 animate-spin text-purple-400" />
+          <span>{savingNotice}</span>
+        </div>
+      )}
+
+      {/* Camera Permission / Device Error Banner */}
+      {cameraError && (
+        <div className="p-4 bg-red-950/80 border border-red-500/60 rounded-2xl text-red-200 text-xs flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
+            <span>{cameraError}</span>
+          </div>
+          <button
+            onClick={() => startCamera()}
+            className="px-3 py-1 bg-red-800 hover:bg-red-700 rounded-lg text-white font-medium"
+          >
+            Retry Camera
+          </button>
+        </div>
+      )}
+
+      {/* Main Viewport Container */}
       <div
         ref={containerRef}
-        className="relative bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl aspect-video w-full flex items-center justify-center group"
+        className="relative aspect-video w-full bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center"
       >
-        {/* Flash effect on snapshot capture */}
-        {capturedFlash && <div className="absolute inset-0 bg-white/70 z-50 pointer-events-none transition-opacity duration-200" />}
+        {/* Flash effect on snapshot */}
+        {capturedFlash && <div className="absolute inset-0 bg-white z-40 animate-fadeOut" />}
 
-        {/* Video feed element */}
+        {/* Video Element */}
         <video
           ref={videoRef}
           playsInline
           muted
-          className={`w-full h-full object-cover ${!isCameraActive ? 'hidden' : ''}`}
+          autoPlay
+          className={`w-full h-full object-contain ${!isCameraActive ? 'hidden' : 'block'}`}
         />
 
-        {/* Real-time HTML5 Canvas bounding box overlay */}
+        {/* Bounding Box Canvas Overlay */}
         <canvas
           ref={canvasRef}
-          className={`absolute inset-0 w-full h-full object-cover pointer-events-none z-10 ${!isCameraActive ? 'hidden' : ''}`}
+          className={`absolute inset-0 pointer-events-none z-10 w-full h-full object-contain ${!isCameraActive ? 'hidden' : 'block'}`}
         />
 
-        {/* Camera Inactive Placeholder */}
+        {/* Inactive Camera Placeholder */}
         {!isCameraActive && (
-          <div className="text-center p-6 space-y-4 max-w-md">
-            <div className="w-20 h-20 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-blue-400 shadow-inner">
-              <Camera className="w-10 h-10" />
+          <div className="flex flex-col items-center justify-center text-center p-6 space-y-4">
+            <div className="p-4 bg-slate-900 border border-slate-800 rounded-full shadow-inner">
+              <Camera className="w-12 h-12 text-slate-600" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-white">Live Camera AI Detection</h3>
-              <p className="text-sm text-slate-400 mt-1">
-                Real-time YOLO object detection, road damage recognition, pedestrian safety, and ByteTrack tracking.
+              <h3 className="text-base font-bold text-white">Live Camera is Inactive</h3>
+              <p className="text-xs text-slate-400 max-w-sm mt-1">
+                Click "Start Camera" to access your laptop webcam or mobile camera for real-time YOLO detection and hazard alerts.
               </p>
             </div>
             <button
+              type="button"
               onClick={() => startCamera()}
-              className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl shadow-lg shadow-blue-600/30 transition flex items-center justify-center gap-2 mx-auto active:scale-95"
+              className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-cyan-600/30 flex items-center space-x-2"
             >
-              <Camera className="w-5 h-5" />
+              <Camera className="w-4 h-4" />
               <span>Start Camera</span>
             </button>
           </div>
         )}
 
-        {/* Camera Error Message Banner */}
-        {cameraError && (
-          <div className="absolute inset-x-4 top-4 z-40 bg-red-950/90 border border-red-500/80 text-red-200 p-3.5 rounded-xl text-xs md:text-sm flex items-start gap-2.5 shadow-xl backdrop-blur-md">
-            <XCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p className="font-semibold">Camera Access Warning</p>
-              <p className="mt-0.5 opacity-90">{cameraError}</p>
-            </div>
-            <button
-              onClick={() => startCamera()}
-              className="px-2.5 py-1 bg-red-800 hover:bg-red-700 rounded-lg text-white font-medium text-xs shrink-0"
-            >
-              Retry
-            </button>
-          </div>
-        )}
-
-        {/* Live Top Status Telemetry HUD */}
+        {/* Live Overlays (When Camera is Active) */}
         {isCameraActive && (
-          <div className="absolute top-3 inset-x-3 z-30 flex items-center justify-between pointer-events-none">
-            {/* Left Status Pills */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="px-2.5 py-1 bg-slate-900/80 backdrop-blur border border-slate-700/70 rounded-lg text-xs font-mono font-semibold text-emerald-400 flex items-center gap-1.5 shadow">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>REC LIVE</span>
-              </span>
-
-              <span className="px-2.5 py-1 bg-slate-900/80 backdrop-blur border border-slate-700/70 rounded-lg text-xs font-mono text-slate-200 shadow">
-                {fps} FPS
-              </span>
-
-              <span className="px-2.5 py-1 bg-slate-900/80 backdrop-blur border border-slate-700/70 rounded-lg text-xs font-mono text-slate-200 shadow">
-                {latencyMs} ms
-              </span>
-
-              <span
-                className={`px-2.5 py-1 backdrop-blur border rounded-lg text-xs font-mono shadow ${
-                  wsStatus === 'connected'
-                    ? 'bg-blue-950/80 border-blue-500/70 text-blue-300'
-                    : 'bg-amber-950/80 border-amber-500/70 text-amber-300'
+          <>
+            {/* Top Left: Prestart Vehicle Safety Advisory Badge */}
+            <div className="absolute top-3 left-3 z-20 flex flex-col space-y-1">
+              <div
+                className={`px-3 py-1.5 rounded-xl border backdrop-blur-md shadow-lg flex items-center space-x-2 ${
+                  prestartStatus === 'STOP – DANGER DETECTED'
+                    ? 'bg-red-950/80 border-red-500 text-red-200'
+                    : prestartStatus === 'CAUTION'
+                    ? 'bg-amber-950/80 border-amber-500 text-amber-200'
+                    : 'bg-emerald-950/80 border-emerald-500 text-emerald-200'
                 }`}
               >
-                AI WS: {wsStatus.toUpperCase()}
-              </span>
+                {prestartStatus === 'STOP – DANGER DETECTED' ? (
+                  <ShieldAlert className="w-4 h-4 text-red-400" />
+                ) : prestartStatus === 'CAUTION' ? (
+                  <AlertTriangle className="w-4 h-4 text-amber-400" />
+                ) : (
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                )}
+                <span className="text-xs font-bold uppercase tracking-wider">{prestartStatus}</span>
+              </div>
+
+              {/* Prestart reasons */}
+              {prestartReasons.length > 0 && (
+                <div className="bg-black/70 backdrop-blur-sm px-2 py-1 rounded-lg text-[10px] text-slate-300 max-w-xs">
+                  {prestartReasons[0]}
+                </div>
+              )}
             </div>
 
-            {/* Right Detection Summary */}
-            <div className="hidden sm:flex items-center gap-2">
-              <span className="px-3 py-1 bg-slate-900/80 backdrop-blur border border-slate-700/70 rounded-lg text-xs font-medium text-slate-200 shadow">
-                Objects: <strong className="text-white">{counts.total}</strong>
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Bottom Floating Control Bar */}
-        {isCameraActive && (
-          <div className="absolute bottom-3 inset-x-3 z-30 flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-900/85 backdrop-blur-md border border-slate-800 shadow-xl">
-            {/* Camera selector & Switch */}
-            <div className="flex items-center gap-2">
-              {devices.length > 1 && (
-                <select
-                  value={selectedDeviceId}
-                  onChange={handleDeviceChange}
-                  className="bg-slate-800 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[130px] md:max-w-[200px] truncate"
-                >
-                  {devices.map((device, idx) => (
-                    <option key={device.deviceId || idx} value={device.deviceId}>
-                      {device.label || `Camera ${idx + 1}`}
-                    </option>
-                  ))}
-                </select>
+            {/* Top Right: Telemetry & Recording Indicator */}
+            <div className="absolute top-3 right-3 z-20 flex items-center space-x-2">
+              {/* Visible Recording Indicator (Phase 5) */}
+              {isRecording && (
+                <div className="px-3 py-1 bg-red-950/90 border border-red-500 rounded-xl flex items-center space-x-2 text-xs font-mono font-bold text-red-300 animate-pulse">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
+                  <span>REC {formatRecordingTime(recordingSeconds)}</span>
+                </div>
               )}
 
-              <button
-                onClick={switchCameraFacing}
-                className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs flex items-center gap-1.5 transition active:scale-95"
-                title="Switch front/rear camera (Mobile)"
-              >
-                <SwitchCamera className="w-4 h-4 text-blue-400" />
-                <span className="hidden md:inline">{facingMode === 'environment' ? 'Rear' : 'Front'}</span>
-              </button>
+              {/* FPS & Latency Counter */}
+              <div className="px-2.5 py-1 bg-black/75 backdrop-blur-md border border-slate-700/80 rounded-xl text-[11px] font-mono text-cyan-400 flex items-center space-x-2">
+                <span>{fps} FPS</span>
+                <span className="text-slate-600">|</span>
+                <span>{latencyMs}ms</span>
+              </div>
             </div>
 
-            {/* Main Action Buttons */}
-            <div className="flex items-center gap-2">
+            {/* Bottom Left: Live Counts HUD */}
+            <div className="absolute bottom-3 left-3 z-20 flex items-center space-x-2">
+              <div className="px-2.5 py-1 bg-black/75 backdrop-blur-md border border-slate-700/80 rounded-xl text-xs flex items-center space-x-3 text-white">
+                <span className="flex items-center gap-1 text-blue-400">
+                  <Car className="w-3.5 h-3.5" /> {counts.vehicles}
+                </span>
+                <span className="flex items-center gap-1 text-emerald-400">
+                  <Users className="w-3.5 h-3.5" /> {counts.pedestrians}
+                </span>
+                <span className="flex items-center gap-1 text-red-400">
+                  <AlertTriangle className="w-3.5 h-3.5" /> {counts.hazards}
+                </span>
+              </div>
+            </div>
+
+            {/* Bottom Right: Quick Snapshot Button */}
+            <div className="absolute bottom-3 right-3 z-20">
               <button
+                type="button"
                 onClick={captureSnapshot}
-                className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs flex items-center gap-1.5 shadow-md shadow-blue-600/30 transition active:scale-95"
-                title="Capture and save inspection image"
+                className="p-2.5 bg-black/75 hover:bg-slate-800 text-white rounded-xl border border-slate-700 backdrop-blur-md transition-all shadow-lg"
+                title="Capture Snapshot Evidence"
               >
-                <Aperture className="w-4 h-4" />
-                <span>Capture</span>
-              </button>
-
-              <button
-                onClick={stopCamera}
-                className="px-3.5 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-500 text-white font-medium text-xs flex items-center gap-1.5 shadow-md transition active:scale-95"
-                title="Stop camera and release hardware"
-              >
-                <VideoOff className="w-4 h-4" />
-                <span>Stop</span>
+                <Aperture className="w-4 h-4 text-cyan-400" />
               </button>
             </div>
-
-            {/* Right Tools */}
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={toggleFullscreen}
-                className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs transition"
-                title="Toggle fullscreen mode"
-              >
-                {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
+          </>
         )}
       </div>
 
-      {/* Live AI Statistics Panel */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-        <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
-            <Car className="w-5 h-5" />
+      {/* PHASE 3: Live GPS Device Location & Status Bar */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center space-x-3">
+          <div className={`p-2 rounded-xl ${gpsCoords ? 'bg-cyan-950 border border-cyan-800' : 'bg-slate-800'}`}>
+            <MapPin className={`w-4 h-4 ${gpsCoords ? 'text-cyan-400' : 'text-slate-500'}`} />
           </div>
           <div>
-            <p className="text-xs text-slate-400">Vehicles</p>
-            <p className="text-xl font-bold text-white">{counts.vehicles}</p>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-bold text-white uppercase tracking-wider">Device GPS Location</span>
+              {gpsActive ? (
+                <span className="px-1.5 py-0.5 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded text-[10px] font-bold">
+                  Tracking Active
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.5 bg-slate-800 text-slate-400 rounded text-[10px]">
+                  Tracking Stopped
+                </span>
+              )}
+            </div>
+
+            {gpsError ? (
+              <p className="text-xs text-amber-400 mt-0.5">{gpsError}</p>
+            ) : gpsCoords ? (
+              <p className="text-xs font-mono text-cyan-300 mt-0.5">
+                Lat: {gpsCoords.latitude.toFixed(6)}, Lng: {gpsCoords.longitude.toFixed(6)} | Accuracy: ±{Math.round(gpsCoords.accuracy || 0)}m | Time: {gpsCoords.timestamp}
+              </p>
+            ) : (
+              <p className="text-xs text-slate-400 mt-0.5">Acquiring live browser geolocation...</p>
+            )}
           </div>
         </div>
 
-        <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-            <Users className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400">Pedestrians</p>
-            <p className="text-xl font-bold text-white">{counts.pedestrians}</p>
-          </div>
-        </div>
+        {/* GPS Controls */}
+        <div className="flex items-center space-x-2.5">
+          {gpsActive ? (
+            <button
+              type="button"
+              onClick={stopGpsTracking}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 transition-colors"
+            >
+              Stop GPS
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={startGpsTracking}
+              className="px-3 py-1.5 bg-cyan-900/60 hover:bg-cyan-900 text-cyan-300 rounded-xl text-xs font-semibold border border-cyan-800 transition-colors"
+            >
+              Resume GPS
+            </button>
+          )}
 
-        <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400">
-            <AlertTriangle className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400">Hazards</p>
-            <p className="text-xl font-bold text-white">{counts.hazards}</p>
-          </div>
-        </div>
-
-        <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center text-orange-400">
-            <Layers className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400">Potholes</p>
-            <p className="text-xl font-bold text-white">{counts.potholes}</p>
-          </div>
-        </div>
-
-        <div className="bg-slate-900/60 border border-slate-800 p-3 rounded-xl flex items-center gap-3 col-span-2 sm:col-span-1">
-          <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-            <Activity className="w-5 h-5" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400">Total Tracked</p>
-            <p className="text-xl font-bold text-white">{counts.total}</p>
-          </div>
+          {onOpenMap && (
+            <button
+              type="button"
+              onClick={onOpenMap}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold border border-slate-700 flex items-center space-x-1.5 transition-colors"
+            >
+              <Navigation className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Open Map</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Active Detections Feed Table */}
-      {detections.length > 0 && (
-        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
-          <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">
-            Active Real-Time Tracked Objects ({detections.length})
-          </h4>
-          <div className="flex flex-wrap gap-2">
-            {detections.map((det, idx) => (
-              <div
-                key={idx}
-                className={`text-xs px-2.5 py-1 rounded-lg border flex items-center gap-1.5 ${
-                  det.danger_level === 'Danger Zone' || det.is_wrong_way
-                    ? 'bg-red-950/60 border-red-500/50 text-red-200'
-                    : det.category === 'Road Damage'
-                    ? 'bg-orange-950/60 border-orange-500/50 text-orange-200'
-                    : 'bg-slate-800/80 border-slate-700 text-slate-200'
-                }`}
-              >
-                <span className="font-mono text-blue-400 font-bold">#{det.tracking_id || idx + 1}</span>
-                <span className="font-semibold">{det.label}</span>
-                <span className="opacity-75">{Math.round(det.confidence * 100)}%</span>
-                {det.speed_kmh && det.speed_kmh > 0 && (
-                  <span className="text-emerald-400 font-mono">({det.speed_kmh} km/h)</span>
-                )}
-                {det.is_wrong_way && <span className="font-bold text-red-400 animate-pulse">[WRONG WAY]</span>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* PHASE 7: Ethics & Responsible AI Notice */}
+      <div className="p-3 bg-slate-900/60 border border-slate-800/80 rounded-xl text-[11px] text-slate-400 flex items-center space-x-2">
+        <Info className="w-4 h-4 text-slate-500 flex-shrink-0" />
+        <span>
+          <strong>Safety & Ethics:</strong> YOLO object tracking assigns spatial IDs (e.g. Pedestrian #1) for proximity and collision prevention. The platform does not use facial recognition, biometric identity, or claim to determine driver identities.
+        </span>
+      </div>
     </div>
   );
 };
-

@@ -1,11 +1,19 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { ObjectId } from 'mongodb';
 import { dbManager } from '../db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'roadvision-ai-jwt-super-secret-key-2026-production';
+
+function getUserQuery(userId) {
+  if (ObjectId.isValid(userId)) {
+    return { $or: [{ _id: new ObjectId(userId) }, { _id: userId }] };
+  }
+  return { _id: userId };
+}
 
 // Register User
 router.post('/register', async (req, res) => {
@@ -45,7 +53,7 @@ router.post('/register', async (req, res) => {
     };
 
     const result = await usersCol.insertOne(newUser);
-    const userId = result.insertedId;
+    const userId = result.insertedId.toString();
 
     const token = jwt.sign(
       { id: userId, email: newUser.email, role: newUser.role, full_name: newUser.full_name },
@@ -94,8 +102,9 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
+    const userId = user._id.toString();
     const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role, full_name: user.full_name },
+      { id: userId, email: user.email, role: user.role, full_name: user.full_name },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -105,7 +114,7 @@ router.post('/login', async (req, res) => {
       access_token: token,
       token_type: 'bearer',
       user: {
-        id: user._id,
+        id: userId,
         email: user.email,
         full_name: user.full_name,
         role: user.role,
@@ -131,13 +140,13 @@ router.post('/login', async (req, res) => {
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const usersCol = dbManager.collection('users');
-    const user = await usersCol.findOne({ _id: req.user.id });
+    const user = await usersCol.findOne(getUserQuery(req.user.id));
     if (!user) {
       return res.status(404).json({ error: 'User profile not found.' });
     }
 
     return res.json({
-      id: user._id,
+      id: user._id.toString(),
       email: user.email,
       full_name: user.full_name,
       role: user.role,
@@ -171,13 +180,13 @@ router.put('/profile', authenticateToken, async (req, res) => {
     if (voice_settings !== undefined) updateData.voice_settings = voice_settings;
 
     const usersCol = dbManager.collection('users');
-    await usersCol.updateOne({ _id: req.user.id }, { $set: updateData });
+    await usersCol.updateOne(getUserQuery(req.user.id), { $set: updateData });
 
-    const updatedUser = await usersCol.findOne({ _id: req.user.id });
+    const updatedUser = await usersCol.findOne(getUserQuery(req.user.id));
     return res.json({
       message: 'Profile updated successfully in MongoDB',
       user: {
-        id: updatedUser._id,
+        id: updatedUser._id.toString(),
         email: updatedUser.email,
         full_name: updatedUser.full_name,
         role: updatedUser.role,

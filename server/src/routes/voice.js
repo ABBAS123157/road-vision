@@ -1,8 +1,16 @@
 import express from 'express';
+import { ObjectId } from 'mongodb';
 import { dbManager } from '../db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
+
+function getUserQuery(userId) {
+  if (ObjectId.isValid(userId)) {
+    return { $or: [{ _id: new ObjectId(userId) }, { _id: userId }] };
+  }
+  return { _id: userId };
+}
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English', native: 'English', speechCode: 'en-US' },
@@ -19,7 +27,6 @@ const SUPPORTED_LANGUAGES = [
   { code: 'ar', name: 'Arabic', native: 'العربية', speechCode: 'ar-SA' }
 ];
 
-// Get available languages and user's saved preferences
 router.get('/languages', (req, res) => {
   return res.json({ supported_languages: SUPPORTED_LANGUAGES });
 });
@@ -27,7 +34,7 @@ router.get('/languages', (req, res) => {
 router.get('/preferences', authenticateToken, async (req, res) => {
   try {
     const usersCol = dbManager.collection('users');
-    const user = await usersCol.findOne({ _id: req.user.id });
+    const user = await usersCol.findOne(getUserQuery(req.user.id));
     if (!user) {
       return res.status(404).json({ error: 'User not found.' });
     }
@@ -58,7 +65,7 @@ router.put('/preferences', authenticateToken, async (req, res) => {
     if (default_language) updateObj.default_language = default_language;
     if (voice_settings) updateObj.voice_settings = voice_settings;
 
-    await usersCol.updateOne({ _id: req.user.id }, { $set: updateObj });
+    await usersCol.updateOne(getUserQuery(req.user.id), { $set: updateObj });
 
     return res.json({
       message: 'Multilingual preferences saved successfully in MongoDB',

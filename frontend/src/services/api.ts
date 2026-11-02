@@ -1,12 +1,22 @@
 const API_BASE = '/api';
 
 export interface User {
-  id: number;
+  id: string | number;
   email: string;
   full_name: string;
   role: string;
   phone?: string;
   emergency_contact?: string;
+  preferred_languages?: string[];
+  default_language?: string;
+  voice_settings?: {
+    voice_output_enabled: boolean;
+    speech_rate: number;
+    pitch: number;
+    volume: number;
+    selected_voice?: string;
+  };
+  created_at?: string;
 }
 
 export interface DetectionItem {
@@ -39,6 +49,64 @@ export interface LiveDetectionResponse {
   };
   status: string;
   timestamp: string;
+}
+
+export interface RoadVideoRecord {
+  _id?: string;
+  video_id: string;
+  user_id: string;
+  user_email?: string;
+  date_time: string;
+  duration: number;
+  file_path: string;
+  file_size_bytes: number;
+  thumbnail_url?: string;
+  trigger_event: string;
+  gps: {
+    latitude: number | null;
+    longitude: number | null;
+    accuracy_meters: number | null;
+  };
+  detected_objects: any[];
+  detection_summary: string;
+  created_at: string;
+}
+
+export interface GpsLogPoint {
+  latitude: number;
+  longitude: number;
+  altitude?: number;
+  accuracy_meters?: number;
+  speed_kmh?: number;
+  heading?: number;
+  timestamp: string;
+}
+
+export interface DetectionEventRecord {
+  event_id: string;
+  user_id: string;
+  event_type: string;
+  object_label: string;
+  confidence: number;
+  tracking_id?: number;
+  severity: string;
+  gps: {
+    latitude: number | null;
+    longitude: number | null;
+  };
+  details?: any;
+  timestamp: string;
+}
+
+export interface DashboardStats {
+  total_events: number;
+  total_videos: number;
+  total_video_duration_seconds: number;
+  vehicles_detected: number;
+  persons_detected: number;
+  potholes_detected: number;
+  hazards_detected: number;
+  recent_activity: DetectionEventRecord[];
 }
 
 export interface BOQItem {
@@ -75,7 +143,9 @@ export interface HazardAlert {
   distance_meters: number;
   advance_stage?: string;
   driving_guidance: string;
+  safe_driving_guidance?: string;
   image_url?: string;
+  is_verified?: boolean;
 }
 
 export interface SpeedAdvisory {
@@ -116,25 +186,248 @@ export interface WeatherData {
   timestamp: string;
 }
 
-// API methods
+// Token helper
+function getAuthHeader(): Record<string, string> {
+  const token = localStorage.getItem('roadvision_jwt_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export const api = {
-  // Auth
-  async login(email: string, password: string) {
+  // ==========================================
+  // PHASE 1: User Authentication (MongoDB)
+  // ==========================================
+  async register(data: {
+    email: string;
+    password: string;
+    full_name: string;
+    role?: string;
+    phone?: string;
+    emergency_contact?: string;
+    preferred_languages?: string[];
+    default_language?: string;
+  }) {
+    const res = await fetch(`${API_BASE}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Registration failed');
+    if (result.access_token) {
+      localStorage.setItem('roadvision_jwt_token', result.access_token);
+      localStorage.setItem('roadvision_user', JSON.stringify(result.user));
+    }
+    return result;
+  },
+
+  async login(credentials: { email: string; password: string } | string, maybePassword?: string) {
+    let email = '';
+    let password = '';
+    if (typeof credentials === 'string') {
+      email = credentials;
+      password = maybePassword || '';
+    } else {
+      email = credentials.email;
+      password = credentials.password;
+    }
+
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
-    if (!res.ok) throw new Error('Authentication failed');
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Invalid credentials');
+    if (result.access_token) {
+      localStorage.setItem('roadvision_jwt_token', result.access_token);
+      localStorage.setItem('roadvision_user', JSON.stringify(result.user));
+    }
+    return result;
+  },
+
+  async getCurrentUser(): Promise<User | null> {
+    const token = localStorage.getItem('roadvision_jwt_token');
+    if (!token) return null;
+    try {
+      const res = await fetch(`${API_BASE}/auth/me`, {
+        headers: { ...getAuthHeader() }
+      });
+      if (!res.ok) {
+        this.logout();
+        return null;
+      }
+      const user = await res.json();
+      localStorage.setItem('roadvision_user', JSON.stringify(user));
+      return user;
+    } catch {
+      return null;
+    }
+  },
+
+  async updateProfile(data: Partial<User>) {
+    const res = await fetch(`${API_BASE}/auth/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to update profile');
+    return result;
+  },
+
+  logout() {
+    localStorage.removeItem('roadvision_jwt_token');
+    localStorage.removeItem('roadvision_user');
+  },
+
+  getStoredUser(): User | null {
+    try {
+      const u = localStorage.getItem('roadvision_user');
+      return u ? JSON.parse(u) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  // ==========================================
+  // PHASE 5 & 6: Road Video Recording & Gallery (MongoDB)
+  // ==========================================
+  async uploadRoadVideo(formData: FormData): Promise<{ message: string; video: RoadVideoRecord }> {
+    const res = await fetch(`${API_BASE}/videos/upload`, {
+      method: 'POST',
+      headers: { ...getAuthHeader() },
+      body: formData
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to upload video');
+    return result;
+  },
+
+  async getSavedVideos(): Promise<{ total: number; videos: RoadVideoRecord[] }> {
+    const res = await fetch(`${API_BASE}/videos`, {
+      headers: { ...getAuthHeader() }
+    });
+    if (!res.ok) throw new Error('Failed to fetch videos');
     return res.json();
   },
 
+  async getVideoById(videoId: string): Promise<RoadVideoRecord> {
+    const res = await fetch(`${API_BASE}/videos/${videoId}`, {
+      headers: { ...getAuthHeader() }
+    });
+    if (!res.ok) throw new Error('Video not found');
+    return res.json();
+  },
+
+  async deleteVideo(videoId: string): Promise<{ message: string }> {
+    const res = await fetch(`${API_BASE}/videos/${videoId}`, {
+      method: 'DELETE',
+      headers: { ...getAuthHeader() }
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to delete video');
+    return result;
+  },
+
+  // ==========================================
+  // PHASE 3: Real-Time Device GPS Updates (MongoDB)
+  // ==========================================
+  async sendGpsUpdate(coords: {
+    latitude: number;
+    longitude: number;
+    altitude?: number;
+    accuracy?: number;
+    speed?: number;
+    heading?: number;
+  }) {
+    const res = await fetch(`${API_BASE}/gps/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(coords)
+    });
+    return res.json();
+  },
+
+  async getGpsHistory(limit = 100): Promise<{ total: number; points: GpsLogPoint[] }> {
+    const res = await fetch(`${API_BASE}/gps/history?limit=${limit}`, {
+      headers: { ...getAuthHeader() }
+    });
+    return res.json();
+  },
+
+  async getLatestGps(): Promise<GpsLogPoint | null> {
+    const res = await fetch(`${API_BASE}/gps/latest`, {
+      headers: { ...getAuthHeader() }
+    });
+    return res.json();
+  },
+
+  // ==========================================
+  // PHASE 7 & 8: Detection Events & Dashboard Stats (MongoDB)
+  // ==========================================
+  async recordDetectionEvent(eventData: {
+    event_type: string;
+    object_label: string;
+    confidence: number;
+    tracking_id?: number;
+    gps_lat?: number;
+    gps_lng?: number;
+    severity?: string;
+    details?: any;
+  }) {
+    const res = await fetch(`${API_BASE}/detection/event`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(eventData)
+    });
+    return res.json();
+  },
+
+  async getDetectionHistory(limit = 50): Promise<{ total: number; events: DetectionEventRecord[] }> {
+    const res = await fetch(`${API_BASE}/detection/history?limit=${limit}`, {
+      headers: { ...getAuthHeader() }
+    });
+    return res.json();
+  },
+
+  async getDashboardStats(): Promise<DashboardStats> {
+    const res = await fetch(`${API_BASE}/detection/stats`, {
+      headers: { ...getAuthHeader() }
+    });
+    return res.json();
+  },
+
+  // ==========================================
+  // PHASE 11: Multilingual Voice Preferences (MongoDB)
+  // ==========================================
+  async getVoicePreferences() {
+    const res = await fetch(`${API_BASE}/voice/preferences`, {
+      headers: { ...getAuthHeader() }
+    });
+    return res.json();
+  },
+
+  async saveVoicePreferences(data: {
+    preferred_languages?: string[];
+    default_language?: string;
+    voice_settings?: any;
+  }) {
+    const res = await fetch(`${API_BASE}/voice/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(data)
+    });
+    return res.json();
+  },
+
+  // ==========================================
+  // AI & Existing Core Modules
+  // ==========================================
   async getModelStatus() {
     const res = await fetch(`${API_BASE}/ai/model-status`);
     return res.json();
   },
 
-  // Image upload detection
   async detectImage(file: File, lat?: number, lon?: number) {
     const formData = new FormData();
     formData.append('file', file);
@@ -156,6 +449,11 @@ export const api = {
     return res.json();
   },
 
+  async getActiveHazards(lat: number, lng: number): Promise<{ hazards_in_range: HazardAlert[] }> {
+    const res = await fetch(`${API_BASE}/safety/hazards/route?user_lat=${lat}&user_lng=${lng}`);
+    return res.json();
+  },
+
   async getSpeedAdvisory(speed: number, roadType = 'City Road', hasHazard = false): Promise<SpeedAdvisory> {
     const res = await fetch(`${API_BASE}/navigation/advisory?speed=${speed}&road_type=${encodeURIComponent(roadType)}&has_hazard_ahead=${hasHazard}`);
     if (!res.ok) throw new Error('Failed to fetch speed advisory');
@@ -173,7 +471,15 @@ export const api = {
     return res.json();
   },
 
-  async getRoadRiskScore(potholes = 0, cracks = 0, density = 'Low', isWaterlogged = false, speed = 40) {
+  async getRoadRiskScore(potholes: any = 0, cracks = 0, density = 'Low', isWaterlogged = false, speed = 40) {
+    if (typeof potholes === 'object') {
+      const res = await fetch(`${API_BASE}/safety/risk-score`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(potholes)
+      });
+      return res.json();
+    }
     const res = await fetch(`${API_BASE}/safety/risk-score?potholes=${potholes}&cracks=${cracks}&traffic_density=${density}&is_waterlogged=${isWaterlogged}&speed=${speed}`);
     return res.json();
   },

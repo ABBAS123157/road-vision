@@ -18,6 +18,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://127.0.0.1:8000';
 
 // Middleware
 app.use(cors({
@@ -32,11 +33,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// Also support root backend uploads if needed
-const BACKEND_UPLOADS = path.join(__dirname, '..', '..', 'backend', 'uploads');
-app.use('/backend-uploads', express.static(BACKEND_UPLOADS));
-
-// Mount API routes
+// Mount Core MongoDB & Express API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/gps', gpsRoutes);
@@ -62,8 +59,41 @@ app.get('/api/health', (req, res) => {
     service: 'RoadVision AI Express & MongoDB Gateway',
     version: '2.0.0',
     database: dbStatus,
+    python_engine: PYTHON_BACKEND_URL,
     timestamp: new Date().toISOString()
   });
+});
+
+// Fallback forwarder for Python FastAPI routes (e.g. /api/ai/model-status, /api/construction, /api/safety)
+app.use('/api', async (req, res) => {
+  try {
+    const targetUrl = `${PYTHON_BACKEND_URL}/api${req.url}`;
+    const headers = { ...req.headers };
+    delete headers.host;
+
+    const options = {
+      method: req.method,
+      headers
+    };
+
+    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body && Object.keys(req.body).length > 0) {
+      options.body = JSON.stringify(req.body);
+      options.headers['content-type'] = 'application/json';
+    }
+
+    const response = await fetch(targetUrl, options);
+    const contentType = response.headers.get('content-type') || 'application/json';
+    res.status(response.status);
+    res.setHeader('Content-Type', contentType);
+
+    const buffer = await response.arrayBuffer();
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    res.status(502).json({
+      error: 'Python AI service unreachable on port 8000',
+      details: err.message
+    });
+  }
 });
 
 // Start server and connect to MongoDB
@@ -72,6 +102,7 @@ async function startServer() {
   app.listen(PORT, () => {
     console.log(`🚀 [RoadVision Server] Running on http://127.0.0.1:${PORT}`);
     console.log(`📁 Video Storage: ${path.join(UPLOADS_DIR, 'videos')}`);
+    console.log(`🔗 Python AI Engine Proxy: ${PYTHON_BACKEND_URL}`);
   });
 }
 

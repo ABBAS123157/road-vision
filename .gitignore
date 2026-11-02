@@ -40,12 +40,15 @@ backend/app/ai/*.pth
 *.sqlite3
 roadvision.db
 
-# Node.js / Frontend
+# Node.js / Frontend / Server
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/coverage/
 frontend/*.local
+server/node_modules/
+server/uploads/
+server/data/
 node_modules/
 dist/
 .cache/

@@ -17,9 +17,15 @@ RoadVision AI is an end-to-end professional platform designed for **Android smar
 
 ## ⚡ Quickest Way to Run (Windows 1-Click Launchers)
 
-Double-click these two batch scripts in the project root:
-1. **`start_backend.bat`** – Starts the FastAPI backend server on port `8000`.
-2. **`start_frontend.bat`** – Starts the Vite React frontend on port `5173`.
+Double-click these batch scripts in the project root:
+1. **`start_all.bat`** – Launches all 3 services concurrently:
+   - Python FastAPI AI Inference Engine (Port `8000`)
+   - Node.js Express & MongoDB Gateway (Port `5000`)
+   - React + Vite Frontend (Port `5173`)
+2. Or run individual services:
+   - **`start_node_server.bat`** (Node.js Express & MongoDB server on port 5000)
+   - **`start_backend.bat`** (FastAPI AI Engine on port 8000)
+   - **`start_frontend.bat`** (Vite frontend on port 5173)
 3. Open your browser at: **`http://localhost:5173`**
 
 ---

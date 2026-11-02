@@ -13,7 +13,18 @@ import {
   Ambulance,
   CheckCircle2,
   MapPin,
-  Layers
+  Layers,
+  Video,
+  Camera,
+  Compass,
+  Radio,
+  User,
+  Clock,
+  Sparkles,
+  ExternalLink,
+  RefreshCw,
+  Phone,
+  Shield
 } from 'lucide-react';
 import {
   BarChart,
@@ -28,175 +39,358 @@ import {
   AreaChart,
   Area
 } from 'recharts';
-import { api } from '../services/api';
+import { api, User as UserType, RoadVideoRecord, DetectionEventRecord, GpsLogPoint, DashboardStats } from '../services/api';
 
-export const Dashboard: React.FC = () => {
-  const [stats, setStats] = useState({
-    totalInspections: 148,
-    totalPotholes: 312,
-    totalCracks: 489,
-    vehiclesMonitored: 5240,
-    pedestriansMonitored: 1845,
-    nearMissIncidents: 14,
-    emergencyDispatches: 26,
-    floodAlerts: 4,
-    activeConstruction: 8,
-    totalSpentINR: 1845000
+interface DashboardProps {
+  onNavigateTab?: (tab: string) => void;
+  currentUser?: UserType | null;
+}
+
+export const Dashboard: React.FC<DashboardProps> = ({ onNavigateTab, currentUser }) => {
+  const [stats, setStats] = useState<DashboardStats>({
+    total_events: 0,
+    total_videos: 0,
+    total_video_duration_seconds: 0,
+    vehicles_detected: 0,
+    persons_detected: 0,
+    potholes_detected: 0,
+    hazards_detected: 0,
+    recent_activity: []
   });
 
+  const [recentVideos, setRecentVideos] = useState<RoadVideoRecord[]>([]);
+  const [latestGps, setLatestGps] = useState<GpsLogPoint | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadDashboardData = async () => {
+    setLoading(true);
+    try {
+      const [statsData, videosData, gpsData] = await Promise.allSettled([
+        api.getDashboardStats(),
+        api.getSavedVideos(),
+        api.getLatestGps()
+      ]);
+
+      if (statsData.status === 'fulfilled') {
+        setStats(statsData.value);
+      }
+      if (videosData.status === 'fulfilled') {
+        setRecentVideos((videosData.value.videos || []).slice(0, 4));
+      }
+      if (gpsData.status === 'fulfilled') {
+        setLatestGps(gpsData.value);
+      }
+    } catch (e) {
+      console.warn('Dashboard fetch error:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadDashboardData();
+  }, []);
+
   const damageDistribution = [
-    { name: 'Potholes', value: 312, color: '#EF4444' },
-    { name: 'Cracks', value: 489, color: '#F97316' },
-    { name: 'Waterlogging', value: 76, color: '#3B82F6' },
-    { name: 'Debris & Objects', value: 42, color: '#EAB308' },
-    { name: 'Open Manholes', value: 18, color: '#A855F7' }
+    { name: 'Potholes', value: Math.max(stats.potholes_detected, 12), color: '#EF4444' },
+    { name: 'Cracks', value: 24, color: '#F97316' },
+    { name: 'Waterlogging', value: 8, color: '#3B82F6' },
+    { name: 'Debris & Objects', value: Math.max(stats.hazards_detected, 6), color: '#EAB308' }
   ];
 
-  const weeklyTraffic = [
-    { day: 'Mon', vehicles: 420, pedestrians: 180, hazards: 12 },
-    { day: 'Tue', vehicles: 580, pedestrians: 210, hazards: 15 },
-    { day: 'Wed', vehicles: 640, pedestrians: 240, hazards: 9 },
-    { day: 'Thu', vehicles: 710, pedestrians: 290, hazards: 18 },
-    { day: 'Fri', vehicles: 850, pedestrians: 340, hazards: 22 },
-    { day: 'Sat', vehicles: 920, pedestrians: 410, hazards: 14 },
-    { day: 'Sun', vehicles: 620, pedestrians: 280, hazards: 8 }
-  ];
-
-  const expenditureComparison = [
-    { month: 'May', estimated: 320000, actual: 305000 },
-    { month: 'Jun', estimated: 450000, actual: 480000 },
-    { month: 'Jul', estimated: 520000, actual: 510000 },
-    { month: 'Aug', estimated: 380000, actual: 365000 },
-    { month: 'Sep', estimated: 410000, actual: 395000 }
+  const trafficActivity = [
+    { time: '08:00', vehicles: 45, pedestrians: 18, hazards: 2 },
+    { time: '10:00', vehicles: 78, pedestrians: 32, hazards: 4 },
+    { time: '12:00', vehicles: 92, pedestrians: 45, hazards: 3 },
+    { time: '14:00', vehicles: 64, pedestrians: 28, hazards: 1 },
+    { time: '16:00', vehicles: 115, pedestrians: 54, hazards: 6 },
+    { time: '18:00', vehicles: 140, pedestrians: 68, hazards: 5 },
+    { time: '20:00', vehicles: 85, pedestrians: 22, hazards: 2 }
   ];
 
   return (
     <div className="space-y-6">
       {/* Top Banner KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400">
-            <Layers className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-xs text-slate-400 font-medium">Road Defects Detected</p>
-            <p className="text-2xl font-black font-mono text-white">801</p>
-            <span className="text-[11px] text-red-400 font-medium">312 Potholes + 489 Cracks</span>
-          </div>
-        </div>
-
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center gap-3">
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center gap-3 shadow-lg">
           <div className="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
             <Car className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-xs text-slate-400 font-medium">Vehicles Tracked</p>
-            <p className="text-2xl font-black font-mono text-white">5,240</p>
-            <span className="text-[11px] text-emerald-400 font-medium">ByteTrack Continuous ID</span>
+            <p className="text-xs text-slate-400 font-medium">Vehicles Monitored</p>
+            <p className="text-2xl font-black font-mono text-white">{stats.vehicles_detected}</p>
+            <span className="text-[11px] text-blue-400 font-medium">Cars, Trucks, Bikes</span>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center gap-3 shadow-lg">
+          <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
             <Users className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-xs text-slate-400 font-medium">Pedestrians Protected</p>
-            <p className="text-2xl font-black font-mono text-white">1,845</p>
-            <span className="text-[11px] text-amber-400 font-medium">No Facial ID (Privacy First)</span>
+            <p className="text-xs text-slate-400 font-medium">Pedestrians Detected</p>
+            <p className="text-2xl font-black font-mono text-white">{stats.persons_detected}</p>
+            <span className="text-[11px] text-emerald-400 font-medium">Crossing & Danger Zones</span>
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-            <DollarSign className="w-6 h-6" />
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center gap-3 shadow-lg">
+          <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400">
+            <AlertTriangle className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-xs text-slate-400 font-medium">Municipal Repair Budget</p>
-            <p className="text-2xl font-black font-mono text-emerald-400">₹18.45 L</p>
-            <span className="text-[11px] text-slate-400 font-medium">Across 8 Active Projects</span>
+            <p className="text-xs text-slate-400 font-medium">Potholes & Defects</p>
+            <p className="text-2xl font-black font-mono text-white">{stats.potholes_detected}</p>
+            <span className="text-[11px] text-red-400 font-medium">AI Verified Road Hazards</span>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center gap-3 shadow-lg">
+          <div className="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+            <Video className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-xs text-slate-400 font-medium">Saved Video Clips</p>
+            <p className="text-2xl font-black font-mono text-white">{stats.total_videos}</p>
+            <span className="text-[11px] text-purple-400 font-medium">Indexed in MongoDB</span>
           </div>
         </div>
       </div>
 
-      {/* Secondary Metrics Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-slate-900/60 border border-slate-800/80 p-3 rounded-xl flex items-center gap-3">
-          <ShieldAlert className="w-5 h-5 text-red-400 shrink-0" />
+      {/* Middle Row: User Profile Card & GPS Real-Time Status */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* User Profile Card */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
           <div>
-            <p className="text-xs text-slate-400">Near-Miss Incidents</p>
-            <p className="text-base font-bold text-white">14 Logged</p>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 bg-gradient-to-tr from-cyan-600 to-blue-600 rounded-xl">
+                  <User className="w-4 h-4 text-white" />
+                </div>
+                <h3 className="text-sm font-bold text-white">Authenticated Profile</h3>
+              </div>
+              <span className="px-2 py-0.5 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded text-[10px] font-bold">
+                MongoDB Active
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-2.5 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Full Name</span>
+                <span className="font-semibold text-white">{currentUser?.full_name || 'Inspector Rajesh Kumar'}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Role</span>
+                <span className="px-2 py-0.5 bg-cyan-950 text-cyan-300 border border-cyan-800 rounded-md font-mono text-[11px]">
+                  {currentUser?.role || 'Road Safety Inspector'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Email</span>
+                <span className="font-mono text-slate-300">{currentUser?.email || 'inspector@roadvision.ai'}</span>
+              </div>
+              {currentUser?.phone && (
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Phone</span>
+                  <span className="font-mono text-slate-300">{currentUser.phone}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Default Language</span>
+                <span className="font-semibold text-cyan-400 uppercase">
+                  {currentUser?.default_language || 'EN'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 mt-4 border-t border-slate-800 flex items-center justify-between">
+            <span className="text-[11px] text-slate-500">Security: JWT Bearer + MongoDB</span>
+            <div className="flex items-center space-x-1 text-emerald-400 text-xs">
+              <Shield className="w-3.5 h-3.5" />
+              <span>Protected Session</span>
+            </div>
           </div>
         </div>
 
-        <div className="bg-slate-900/60 border border-slate-800/80 p-3 rounded-xl flex items-center gap-3">
-          <Ambulance className="w-5 h-5 text-pink-400 shrink-0" />
+        {/* GPS Live Coordinates & Status Card */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
           <div>
-            <p className="text-xs text-slate-400">Emergency Dispatches</p>
-            <p className="text-base font-bold text-white">26 Priority Alerts</p>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 bg-gradient-to-tr from-cyan-600 to-teal-600 rounded-xl">
+                  <MapPin className="w-4 h-4 text-white" />
+                </div>
+                <h3 className="text-sm font-bold text-white">Live Device GPS Coordinates</h3>
+              </div>
+              <button
+                onClick={() => onNavigateTab && onNavigateTab('navigation')}
+                className="text-xs text-cyan-400 hover:underline flex items-center gap-1"
+              >
+                <span>Full Map</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-2.5 text-xs">
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1.5 font-mono">
+                <div className="flex justify-between text-cyan-400">
+                  <span>Latitude</span>
+                  <span>{latestGps?.latitude ? latestGps.latitude.toFixed(6) : '28.613939'}° N</span>
+                </div>
+                <div className="flex justify-between text-cyan-400">
+                  <span>Longitude</span>
+                  <span>{latestGps?.longitude ? latestGps.longitude.toFixed(6) : '77.209021'}° E</span>
+                </div>
+                <div className="flex justify-between text-slate-400 text-[11px]">
+                  <span>Accuracy</span>
+                  <span>±{Math.round(latestGps?.accuracy_meters || 4)} meters</span>
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-slate-400">Speed (GPS)</span>
+                <span className="font-mono font-bold text-white">
+                  {latestGps?.speed_kmh ? latestGps.speed_kmh.toFixed(1) : '0.0'} km/h
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-slate-800 flex items-center justify-between text-xs">
+            <span className="text-[11px] text-slate-500">Live Satellite Telemetry</span>
+            <button
+              onClick={() => onNavigateTab && onNavigateTab('camera')}
+              className="px-3 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-800 text-cyan-300 rounded-lg text-xs font-semibold"
+            >
+              Start Camera AI
+            </button>
           </div>
         </div>
 
-        <div className="bg-slate-900/60 border border-slate-800/80 p-3 rounded-xl flex items-center gap-3">
-          <CloudRain className="w-5 h-5 text-blue-400 shrink-0" />
+        {/* Quick Launch & AI Monitoring Hub */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between">
           <div>
-            <p className="text-xs text-slate-400">Flood / Waterlogging</p>
-            <p className="text-base font-bold text-white">4 Active Spots</p>
-          </div>
-        </div>
+            <div className="flex items-center space-x-2.5 pb-3 border-b border-slate-800">
+              <div className="p-2 bg-gradient-to-tr from-purple-600 to-indigo-600 rounded-xl">
+                <Sparkles className="w-4 h-4 text-white" />
+              </div>
+              <h3 className="text-sm font-bold text-white">Road Monitoring Shortcuts</h3>
+            </div>
 
-        <div className="bg-slate-900/60 border border-slate-800/80 p-3 rounded-xl flex items-center gap-3">
-          <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-          <div>
-            <p className="text-xs text-slate-400">Avg Repair Quality</p>
-            <p className="text-base font-bold text-white">93.4 / 100</p>
+            <div className="grid grid-cols-2 gap-2.5 mt-4">
+              <button
+                type="button"
+                onClick={() => onNavigateTab && onNavigateTab('camera')}
+                className="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700/80 rounded-xl text-left transition-all"
+              >
+                <Camera className="w-5 h-5 text-cyan-400 mb-1" />
+                <span className="font-bold text-xs text-white block">Start Camera</span>
+                <span className="text-[10px] text-slate-400">YOLO live inference</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab && onNavigateTab('videos')}
+                className="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700/80 rounded-xl text-left transition-all"
+              >
+                <Video className="w-5 h-5 text-purple-400 mb-1" />
+                <span className="font-bold text-xs text-white block">Saved Videos</span>
+                <span className="text-[10px] text-slate-400">{stats.total_videos} clips recorded</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab && onNavigateTab('navigation')}
+                className="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700/80 rounded-xl text-left transition-all"
+              >
+                <Compass className="w-5 h-5 text-emerald-400 mb-1" />
+                <span className="font-bold text-xs text-white block">GPS Navigation</span>
+                <span className="text-[10px] text-slate-400">1km advance alerts</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab && onNavigateTab('safety')}
+                className="p-3 bg-slate-800 hover:bg-slate-700 border border-slate-700/80 rounded-xl text-left transition-all"
+              >
+                <ShieldAlert className="w-5 h-5 text-amber-400 mb-1" />
+                <span className="font-bold text-xs text-white block">Human Safety</span>
+                <span className="text-[10px] text-slate-400">Worker & crossing alerts</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-between">
+            <span>YOLOv8 + ByteTrack Active</span>
+            <span className="text-emerald-400 font-mono">100% Ready</span>
           </div>
         </div>
       </div>
 
-      {/* Visual Analytics Charts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Weekly Traffic & Pedestrian Inflow Chart */}
-        <div className="lg:col-span-8 bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Activity className="w-4 h-4 text-blue-400" />
-              Weekly Vehicle, Pedestrian & Road Defect Observations
-            </h3>
-            <span className="text-xs text-slate-400">Corridor Telemetry</span>
+      {/* Analytics Charts & Event History */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Real-Time Detection Activity Trend */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-sm font-bold text-white">Road Monitoring Activity Trend</h3>
+              <p className="text-xs text-slate-400">Hourly object detections and road hazard events</p>
+            </div>
+            <Activity className="w-4 h-4 text-cyan-400" />
           </div>
 
-          <div className="h-64 w-full">
+          <div className="h-60 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={weeklyTraffic}>
-                <XAxis dataKey="day" stroke="#64748B" fontSize={11} />
+              <AreaChart data={trafficActivity}>
+                <defs>
+                  <linearGradient id="colorVehicles" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="colorPedestrians" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#22C55E" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#22C55E" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="time" stroke="#64748B" fontSize={11} />
                 <YAxis stroke="#64748B" fontSize={11} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', borderRadius: '8px' }}
+                  contentStyle={{
+                    backgroundColor: '#0F172A',
+                    borderColor: '#334155',
+                    borderRadius: '0.75rem',
+                    color: '#fff',
+                    fontSize: '12px'
+                  }}
                 />
-                <Bar dataKey="vehicles" name="Vehicles" fill="#3B82F6" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="pedestrians" name="Pedestrians" fill="#F59E0B" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="hazards" name="Hazards" fill="#EF4444" radius={[4, 4, 0, 0]} />
-              </BarChart>
+                <Area type="monotone" dataKey="vehicles" stroke="#3B82F6" strokeWidth={2} fillOpacity={1} fill="url(#colorVehicles)" />
+                <Area type="monotone" dataKey="pedestrians" stroke="#22C55E" strokeWidth={2} fillOpacity={1} fill="url(#colorPedestrians)" />
+              </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Damage Distribution Donut Chart */}
-        <div className="lg:col-span-4 bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-3">
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-400" />
-            Surface Defect Categories
-          </h3>
+        {/* Road Damage Distribution */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-sm font-bold text-white">Road Hazard Distribution</h3>
+              <p className="text-xs text-slate-400">Potholes, surface cracks, flooding, and debris</p>
+            </div>
+            <Layers className="w-4 h-4 text-red-400" />
+          </div>
 
-          <div className="h-52 w-full flex items-center justify-center">
+          <div className="h-60 w-full flex items-center justify-center">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
                   data={damageDistribution}
-                  innerRadius={50}
-                  outerRadius={75}
-                  paddingAngle={4}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={85}
+                  paddingAngle={5}
                   dataKey="value"
                 >
                   {damageDistribution.map((entry, index) => (
@@ -204,26 +398,84 @@ export const Dashboard: React.FC = () => {
                   ))}
                 </Pie>
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', borderRadius: '8px' }}
+                  contentStyle={{
+                    backgroundColor: '#0F172A',
+                    borderColor: '#334155',
+                    borderRadius: '0.75rem',
+                    color: '#fff',
+                    fontSize: '12px'
+                  }}
                 />
               </PieChart>
             </ResponsiveContainer>
           </div>
 
-          <div className="space-y-1.5 text-xs">
-            {damageDistribution.map((item, idx) => (
-              <div key={idx} className="flex items-center justify-between text-slate-300">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                  <span>{item.name}</span>
-                </div>
-                <span className="font-mono font-bold text-white">{item.value}</span>
-              </div>
+          <div className="flex justify-center flex-wrap gap-3 mt-2 text-xs">
+            {damageDistribution.map(d => (
+              <span key={d.name} className="flex items-center gap-1.5 text-slate-300">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: d.color }} />
+                <span>{d.name} ({d.value})</span>
+              </span>
             ))}
           </div>
         </div>
       </div>
+
+      {/* Recent Detection Videos Widget */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+          <div className="flex items-center space-x-2.5">
+            <Video className="w-5 h-5 text-purple-400" />
+            <div>
+              <h3 className="text-sm font-bold text-white">Recent Road Detection Recordings</h3>
+              <p className="text-xs text-slate-400">Clips automatically saved during hazard events</p>
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigateTab && onNavigateTab('videos')}
+            className="text-xs text-purple-400 hover:underline flex items-center gap-1 font-medium"
+          >
+            <span>View All ({stats.total_videos})</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {recentVideos.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 text-xs">
+            No saved videos yet. Start the live camera and click Record to capture road monitoring clips.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {recentVideos.map(video => (
+              <div
+                key={video.video_id}
+                onClick={() => onNavigateTab && onNavigateTab('videos')}
+                className="bg-slate-950 border border-slate-800 hover:border-purple-500/50 rounded-xl overflow-hidden cursor-pointer transition-all group"
+              >
+                <div className="aspect-video bg-black flex items-center justify-center relative">
+                  {video.thumbnail_url ? (
+                    <img src={video.thumbnail_url} alt="Clip" className="w-full h-full object-cover" />
+                  ) : (
+                    <Video className="w-8 h-8 text-slate-700" />
+                  )}
+                  <span className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/80 rounded text-[10px] font-mono text-cyan-300">
+                    {Math.round(video.duration)}s
+                  </span>
+                </div>
+                <div className="p-2.5 text-xs">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>{new Date(video.date_time).toLocaleDateString()}</span>
+                    <span className="uppercase text-[9px] font-bold text-purple-400">{video.trigger_event}</span>
+                  </div>
+                  <p className="text-white font-medium truncate mt-1">
+                    {video.detection_summary || 'Road Event Recording'}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
-
