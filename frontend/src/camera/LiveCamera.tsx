@@ -78,6 +78,15 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
     total: 0
   });
 
+  // Secure Context & Insecure Origin helper
+  const isLocalhost = typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === '[::1]'
+  );
+  const isSecure = typeof window !== 'undefined' && (window.isSecureContext || isLocalhost);
+  const [isInsecureOrigin, setIsInsecureOrigin] = useState<boolean>(!isSecure);
+
   // GPS State (Phase 3)
   const [gpsWatchId, setGpsWatchId] = useState<number | null>(null);
   const [gpsActive, setGpsActive] = useState<boolean>(true);
@@ -109,11 +118,10 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
   const prevTrackedPersonsRef = useRef<Set<number>>(new Set());
   const prevPrestartRef = useRef<string>('SAFE TO PROCEED');
 
-  // Enumerate camera devices
+  // Enumerate camera devices (safe: does not show error on initial mount)
   const updateDeviceList = useCallback(async () => {
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-        setCameraError('MediaDevices API not supported in this browser.');
+      if (!navigator.mediaDevices?.enumerateDevices) {
         return;
       }
       const deviceInfos = await navigator.mediaDevices.enumerateDevices();
@@ -319,6 +327,14 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
     setCameraError(null);
     stopCamera();
 
+    if (!isSecure && !navigator.mediaDevices?.getUserMedia) {
+      setIsInsecureOrigin(true);
+      setCameraError(
+        `Browser security restriction: Camera hardware cannot be accessed over plain HTTP on network IP (${window.location.host}). Please open http://localhost:${window.location.port || '5173'} on this PC or switch to HTTPS.`
+      );
+      return;
+    }
+
     const targetFacing = facing || facingMode;
     const constraints: MediaStreamConstraints = {
       audio: false,
@@ -332,7 +348,25 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
     };
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      let stream: MediaStream;
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } else {
+        const legacyGetUserMedia =
+          (navigator as any).getUserMedia ||
+          (navigator as any).webkitGetUserMedia ||
+          (navigator as any).mozGetUserMedia ||
+          (navigator as any).msGetUserMedia;
+
+        if (legacyGetUserMedia) {
+          stream = await new Promise<MediaStream>((resolve, reject) => {
+            legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+          });
+        } else {
+          throw new Error('MediaDevices API not supported in this browser context.');
+        }
+      }
+
       streamRef.current = stream;
 
       if (videoRef.current) {
@@ -341,15 +375,16 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
       }
 
       setIsCameraActive(true);
+      setIsInsecureOrigin(false);
       await updateDeviceList();
       connectWebSocket();
       startFrameStreaming();
     } catch (err: any) {
       console.error('Failed to start camera:', err);
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setCameraError('Camera access denied. Please grant camera permission in your browser address bar.');
+        setCameraError('Camera access denied. Please click the camera icon in your browser address bar to grant permission.');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        setCameraError('No camera found on this device. Please connect a webcam.');
+        setCameraError('No camera found on this device. Please connect a webcam or enable your device camera.');
       } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
         setCameraError('Camera is in use by another application. Please close other camera apps and retry.');
       } else {
@@ -778,17 +813,35 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
 
       {/* Camera Permission / Device Error Banner */}
       {cameraError && (
-        <div className="p-4 bg-red-950/80 border border-red-500/60 rounded-2xl text-red-200 text-xs flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
-            <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
-            <span>{cameraError}</span>
+        <div className="p-4 bg-red-950/90 border border-red-500/70 rounded-2xl text-red-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-start sm:items-center space-x-2.5">
+            <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5 sm:mt-0" />
+            <div>
+              <p className="font-semibold text-white">Camera Access Notice</p>
+              <p className="text-[11px] text-red-300 mt-0.5">{cameraError}</p>
+            </div>
           </div>
-          <button
-            onClick={() => startCamera()}
-            className="px-3 py-1 bg-red-800 hover:bg-red-700 rounded-lg text-white font-medium"
-          >
-            Retry Camera
-          </button>
+          <div className="flex items-center space-x-2 self-end sm:self-auto">
+            {!isLocalhost && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = `${window.location.protocol}//localhost:${window.location.port || '5173'}${window.location.pathname}`;
+                }}
+                className="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 rounded-lg text-white font-medium text-xs shadow transition-colors flex items-center space-x-1"
+                title="Switch to localhost on this computer for immediate webcam access"
+              >
+                <span>Switch to localhost</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => startCamera()}
+              className="px-3 py-1.5 bg-red-800 hover:bg-red-700 rounded-lg text-white font-medium text-xs transition-colors"
+            >
+              Retry Camera
+            </button>
+          </div>
         </div>
       )}
 
