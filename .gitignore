@@ -1,0 +1,105 @@
+# ===========================
+# RoadVision AI - .gitignore
+# ===========================
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+.Python
+.env
+.env.*
+!.env.example
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Model weights (large binary files - download separately)
+*.pt
+*.pth
+*.onnx
+*.tflite
+backend/app/ai/*.pt
+backend/app/ai/*.pth
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+roadvision.db
+
+# Node.js / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+frontend/*.local
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+
+# Uploads / User evidence photos
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# OS-specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V8
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Windows
+$RECYCLE.BIN/
+*.lnk
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Docker
+.dockerignore

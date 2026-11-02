@@ -1,0 +1,31 @@
+# RoadVision AI - Dataset Specification for YOLOv8 Custom Training
+# Compatible with Ultralytics YOLOv8 / YOLOv9 / YOLOv11
+
+path: ../datasets/roadvision_master
+train: images/train
+val: images/val
+test: images/test
+
+# Number of classes
+nc: 17
+
+# Class names
+names:
+  0: Car
+  1: Motorcycle
+  2: Bicycle
+  3: Auto-rickshaw
+  4: Bus
+  5: Truck
+  6: Ambulance
+  7: Fire Engine
+  8: Pedestrian
+  9: Road Worker
+  10: Safety Helmet
+  11: Reflective Vest
+  12: Pothole
+  13: Longitudinal Crack
+  14: Transverse Crack
+  15: Alligator Cracking
+  16: Waterlogging Puddle
+
