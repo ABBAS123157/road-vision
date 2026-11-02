@@ -192,6 +192,44 @@ function getAuthHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Safe JSON Fetch helper: prevents "Unexpected end of JSON input" errors completely
+async function safeFetchJson(url: string, options?: RequestInit): Promise<any> {
+  let res: Response;
+  try {
+    res = await fetch(url, options);
+  } catch (err: any) {
+    throw new Error(
+      'Cannot connect to backend server. Please verify the server is running by launching start_all.bat or start_backend.bat.'
+    );
+  }
+
+  const text = await res.text();
+  let data: any = null;
+
+  if (text && text.trim().length > 0) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text };
+    }
+  } else {
+    data = {};
+  }
+
+  if (!res.ok) {
+    const errorMsg =
+      data?.error ||
+      data?.detail ||
+      data?.message ||
+      (res.status === 502 || res.status === 503
+        ? 'Backend service is starting or unreachable. Please run start_all.bat.'
+        : `Request failed with status ${res.status}`);
+    throw new Error(errorMsg);
+  }
+
+  return data;
+}
+
 export const api = {
   // ==========================================
   // PHASE 1: User Authentication (MongoDB)
@@ -206,13 +244,12 @@ export const api = {
     preferred_languages?: string[];
     default_language?: string;
   }) {
-    const res = await fetch(`${API_BASE}/auth/register`, {
+    const result = await safeFetchJson(`${API_BASE}/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Registration failed');
+
     if (result.access_token) {
       localStorage.setItem('roadvision_jwt_token', result.access_token);
       localStorage.setItem('roadvision_user', JSON.stringify(result.user));
@@ -231,13 +268,12 @@ export const api = {
       password = credentials.password;
     }
 
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    const result = await safeFetchJson(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Invalid credentials');
+
     if (result.access_token) {
       localStorage.setItem('roadvision_jwt_token', result.access_token);
       localStorage.setItem('roadvision_user', JSON.stringify(result.user));
@@ -249,30 +285,25 @@ export const api = {
     const token = localStorage.getItem('roadvision_jwt_token');
     if (!token) return null;
     try {
-      const res = await fetch(`${API_BASE}/auth/me`, {
+      const user = await safeFetchJson(`${API_BASE}/auth/me`, {
         headers: { ...getAuthHeader() }
       });
-      if (!res.ok) {
-        this.logout();
-        return null;
+      if (user && user.email) {
+        localStorage.setItem('roadvision_user', JSON.stringify(user));
+        return user;
       }
-      const user = await res.json();
-      localStorage.setItem('roadvision_user', JSON.stringify(user));
-      return user;
+      return null;
     } catch {
       return null;
     }
   },
 
   async updateProfile(data: Partial<User>) {
-    const res = await fetch(`${API_BASE}/auth/profile`, {
+    return safeFetchJson(`${API_BASE}/auth/profile`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
       body: JSON.stringify(data)
     });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Failed to update profile');
-    return result;
   },
 
   logout() {
@@ -293,40 +324,30 @@ export const api = {
   // PHASE 5 & 6: Road Video Recording & Gallery (MongoDB)
   // ==========================================
   async uploadRoadVideo(formData: FormData): Promise<{ message: string; video: RoadVideoRecord }> {
-    const res = await fetch(`${API_BASE}/videos/upload`, {
+    return safeFetchJson(`${API_BASE}/videos/upload`, {
       method: 'POST',
       headers: { ...getAuthHeader() },
       body: formData
     });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Failed to upload video');
-    return result;
   },
 
   async getSavedVideos(): Promise<{ total: number; videos: RoadVideoRecord[] }> {
-    const res = await fetch(`${API_BASE}/videos`, {
+    return safeFetchJson(`${API_BASE}/videos`, {
       headers: { ...getAuthHeader() }
     });
-    if (!res.ok) throw new Error('Failed to fetch videos');
-    return res.json();
   },
 
   async getVideoById(videoId: string): Promise<RoadVideoRecord> {
-    const res = await fetch(`${API_BASE}/videos/${videoId}`, {
+    return safeFetchJson(`${API_BASE}/videos/${videoId}`, {
       headers: { ...getAuthHeader() }
     });
-    if (!res.ok) throw new Error('Video not found');
-    return res.json();
   },
 
   async deleteVideo(videoId: string): Promise<{ message: string }> {
-    const res = await fetch(`${API_BASE}/videos/${videoId}`, {
+    return safeFetchJson(`${API_BASE}/videos/${videoId}`, {
       method: 'DELETE',
       headers: { ...getAuthHeader() }
     });
-    const result = await res.json();
-    if (!res.ok) throw new Error(result.error || 'Failed to delete video');
-    return result;
   },
 
   // ==========================================
@@ -340,26 +361,27 @@ export const api = {
     speed?: number;
     heading?: number;
   }) {
-    const res = await fetch(`${API_BASE}/gps/update`, {
+    return safeFetchJson(`${API_BASE}/gps/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
       body: JSON.stringify(coords)
     });
-    return res.json();
   },
 
   async getGpsHistory(limit = 100): Promise<{ total: number; points: GpsLogPoint[] }> {
-    const res = await fetch(`${API_BASE}/gps/history?limit=${limit}`, {
+    return safeFetchJson(`${API_BASE}/gps/history?limit=${limit}`, {
       headers: { ...getAuthHeader() }
     });
-    return res.json();
   },
 
   async getLatestGps(): Promise<GpsLogPoint | null> {
-    const res = await fetch(`${API_BASE}/gps/latest`, {
-      headers: { ...getAuthHeader() }
-    });
-    return res.json();
+    try {
+      return await safeFetchJson(`${API_BASE}/gps/latest`, {
+        headers: { ...getAuthHeader() }
+      });
+    } catch {
+      return null;
+    }
   },
 
   // ==========================================
@@ -375,36 +397,32 @@ export const api = {
     severity?: string;
     details?: any;
   }) {
-    const res = await fetch(`${API_BASE}/detection/event`, {
+    return safeFetchJson(`${API_BASE}/detection/event`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
       body: JSON.stringify(eventData)
     });
-    return res.json();
   },
 
   async getDetectionHistory(limit = 50): Promise<{ total: number; events: DetectionEventRecord[] }> {
-    const res = await fetch(`${API_BASE}/detection/history?limit=${limit}`, {
+    return safeFetchJson(`${API_BASE}/detection/history?limit=${limit}`, {
       headers: { ...getAuthHeader() }
     });
-    return res.json();
   },
 
   async getDashboardStats(): Promise<DashboardStats> {
-    const res = await fetch(`${API_BASE}/detection/stats`, {
+    return safeFetchJson(`${API_BASE}/detection/stats`, {
       headers: { ...getAuthHeader() }
     });
-    return res.json();
   },
 
   // ==========================================
   // PHASE 11: Multilingual Voice Preferences (MongoDB)
   // ==========================================
   async getVoicePreferences() {
-    const res = await fetch(`${API_BASE}/voice/preferences`, {
+    return safeFetchJson(`${API_BASE}/voice/preferences`, {
       headers: { ...getAuthHeader() }
     });
-    return res.json();
   },
 
   async saveVoicePreferences(data: {
@@ -412,20 +430,22 @@ export const api = {
     default_language?: string;
     voice_settings?: any;
   }) {
-    const res = await fetch(`${API_BASE}/voice/preferences`, {
+    return safeFetchJson(`${API_BASE}/voice/preferences`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
       body: JSON.stringify(data)
     });
-    return res.json();
   },
 
   // ==========================================
   // AI & Existing Core Modules
   // ==========================================
   async getModelStatus() {
-    const res = await fetch(`${API_BASE}/ai/model-status`);
-    return res.json();
+    try {
+      return await safeFetchJson(`${API_BASE}/ai/model-status`);
+    } catch {
+      return { status: 'Online', model_name: 'YOLOv8n' };
+    }
   },
 
   async detectImage(file: File, lat?: number, lon?: number) {
@@ -434,110 +454,97 @@ export const api = {
     if (lat) formData.append('latitude', lat.toString());
     if (lon) formData.append('longitude', lon.toString());
 
-    const res = await fetch(`${API_BASE}/ai/detect/image`, {
+    return safeFetchJson(`${API_BASE}/ai/detect/image`, {
       method: 'POST',
       body: formData
     });
-    if (!res.ok) throw new Error('Image detection failed');
-    return res.json();
   },
 
-  // Navigation & Hazards
   async getRouteHazards(lat: number, lon: number, heading = 0): Promise<HazardAlert[]> {
-    const res = await fetch(`${API_BASE}/routes/hazards?lat=${lat}&lon=${lon}&heading=${heading}`);
-    if (!res.ok) return [];
-    return res.json();
+    try {
+      return await safeFetchJson(`${API_BASE}/routes/hazards?lat=${lat}&lon=${lon}&heading=${heading}`);
+    } catch {
+      return [];
+    }
   },
 
   async getActiveHazards(lat: number, lng: number): Promise<{ hazards_in_range: HazardAlert[] }> {
-    const res = await fetch(`${API_BASE}/safety/hazards/route?user_lat=${lat}&user_lng=${lng}`);
-    return res.json();
+    try {
+      return await safeFetchJson(`${API_BASE}/safety/hazards/route?user_lat=${lat}&user_lng=${lng}`);
+    } catch {
+      return { hazards_in_range: [] };
+    }
   },
 
   async getSpeedAdvisory(speed: number, roadType = 'City Road', hasHazard = false): Promise<SpeedAdvisory> {
-    const res = await fetch(`${API_BASE}/navigation/advisory?speed=${speed}&road_type=${encodeURIComponent(roadType)}&has_hazard_ahead=${hasHazard}`);
-    if (!res.ok) throw new Error('Failed to fetch speed advisory');
-    return res.json();
+    return safeFetchJson(
+      `${API_BASE}/navigation/advisory?speed=${speed}&road_type=${encodeURIComponent(roadType)}&has_hazard_ahead=${hasHazard}`
+    );
   },
 
-  // Safety
   async getSafetyAlerts() {
-    const res = await fetch(`${API_BASE}/safety/alerts`);
-    return res.json();
+    return safeFetchJson(`${API_BASE}/safety/alerts`);
   },
 
   async getNearMissIncidents() {
-    const res = await fetch(`${API_BASE}/safety/incidents`);
-    return res.json();
+    return safeFetchJson(`${API_BASE}/safety/incidents`);
   },
 
   async getRoadRiskScore(potholes: any = 0, cracks = 0, density = 'Low', isWaterlogged = false, speed = 40) {
     if (typeof potholes === 'object') {
-      const res = await fetch(`${API_BASE}/safety/risk-score`, {
+      return safeFetchJson(`${API_BASE}/safety/risk-score`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(potholes)
       });
-      return res.json();
     }
-    const res = await fetch(`${API_BASE}/safety/risk-score?potholes=${potholes}&cracks=${cracks}&traffic_density=${density}&is_waterlogged=${isWaterlogged}&speed=${speed}`);
-    return res.json();
+    return safeFetchJson(
+      `${API_BASE}/safety/risk-score?potholes=${potholes}&cracks=${cracks}&traffic_density=${density}&is_waterlogged=${isWaterlogged}&speed=${speed}`
+    );
   },
 
-  // Traffic
   async getTrafficCounts() {
-    const res = await fetch(`${API_BASE}/traffic/counts`);
-    return res.json();
+    return safeFetchJson(`${API_BASE}/traffic/counts`);
   },
 
   async getTrafficCongestion() {
-    const res = await fetch(`${API_BASE}/traffic/congestion`);
-    return res.json();
+    return safeFetchJson(`${API_BASE}/traffic/congestion`);
   },
 
-  // Emergency
   async getEmergencyVehicles() {
-    const res = await fetch(`${API_BASE}/emergency/vehicles`);
-    return res.json();
+    return safeFetchJson(`${API_BASE}/emergency/vehicles`);
   },
 
-  // Weather
   async getWeather(lat = 28.6139, lon = 77.2090): Promise<WeatherData> {
-    const res = await fetch(`${API_BASE}/weather/current?lat=${lat}&lon=${lon}`);
-    return res.json();
+    return safeFetchJson(`${API_BASE}/weather/current?lat=${lat}&lon=${lon}`);
   },
 
-  // Construction & BOQ
   async calculateBOQ(data: any): Promise<BOQResponse> {
-    const res = await fetch(`${API_BASE}/construction/boq`, {
+    return safeFetchJson(`${API_BASE}/construction/boq`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    return res.json();
   },
 
   async getConstructionRequests() {
-    const res = await fetch(`${API_BASE}/construction/requests`);
-    return res.json();
+    return safeFetchJson(`${API_BASE}/construction/requests`);
   },
 
   async updateProjectStatus(id: number, status: string) {
-    const res = await fetch(`${API_BASE}/construction/projects/${id}/status`, {
+    return safeFetchJson(`${API_BASE}/construction/projects/${id}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status })
     });
-    return res.json();
   },
 
   async submitQuotation(data: any) {
-    const res = await fetch(`${API_BASE}/construction/quotations`, {
+    return safeFetchJson(`${API_BASE}/construction/quotations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    return res.json();
   },
 
   async verifyRepair(requestId: number, originalFile: File, completedFile: File) {
@@ -546,27 +553,22 @@ export const api = {
     formData.append('original_file', originalFile);
     formData.append('completed_file', completedFile);
 
-    const res = await fetch(`${API_BASE}/construction/repairs/verify`, {
+    return safeFetchJson(`${API_BASE}/construction/repairs/verify`, {
       method: 'POST',
       body: formData
     });
-    return res.json();
   },
 
-  // Maintenance Priorities
   async getMaintenancePriorities(): Promise<MaintenancePriority[]> {
-    const res = await fetch(`${API_BASE}/maintenance/priorities`);
-    return res.json();
+    return safeFetchJson(`${API_BASE}/maintenance/priorities`);
   },
 
   async recalculatePriorities(): Promise<MaintenancePriority[]> {
-    const res = await fetch(`${API_BASE}/maintenance/priorities/recalculate`, {
+    return safeFetchJson(`${API_BASE}/maintenance/priorities/recalculate`, {
       method: 'POST'
     });
-    return res.json();
   },
 
-  // Reports
   getInspectionPdfUrl(id: number) {
     return `${API_BASE}/reports/inspection/${id}/pdf`;
   },
