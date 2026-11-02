@@ -17,7 +17,9 @@ import {
   FileVideo,
   Layers,
   Sparkles,
-  ShieldAlert
+  ShieldAlert,
+  Search,
+  Filter
 } from 'lucide-react';
 import { api, RoadVideoRecord } from '../services/api';
 
@@ -28,6 +30,8 @@ export const VideoGalleryModule: React.FC = () => {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterCategory, setFilterCategory] = useState<'all' | 'hazard' | 'vehicle' | 'pedestrian'>('all');
 
   const fetchVideos = async () => {
     setLoading(true);
@@ -75,6 +79,40 @@ export const VideoGalleryModule: React.FC = () => {
     return `${mb.toFixed(1)} MB`;
   };
 
+  const filteredVideos = videos.filter(v => {
+    const q = searchQuery.toLowerCase().trim();
+    const matchesQuery = !q ||
+      (v.detection_summary && v.detection_summary.toLowerCase().includes(q)) ||
+      (v.trigger_event && v.trigger_event.toLowerCase().includes(q)) ||
+      (v.date_time && v.date_time.toLowerCase().includes(q));
+
+    if (!matchesQuery) return false;
+
+    if (filterCategory === 'hazard') {
+      return (
+        v.trigger_event?.includes('hazard') ||
+        v.detection_summary?.toLowerCase().includes('pothole') ||
+        v.detection_summary?.toLowerCase().includes('crack')
+      );
+    }
+    if (filterCategory === 'vehicle') {
+      return (
+        v.detection_summary?.toLowerCase().includes('vehicle') ||
+        v.detection_summary?.toLowerCase().includes('car') ||
+        v.detection_summary?.toLowerCase().includes('truck') ||
+        v.detection_summary?.toLowerCase().includes('bus')
+      );
+    }
+    if (filterCategory === 'pedestrian') {
+      return (
+        v.detection_summary?.toLowerCase().includes('person') ||
+        v.detection_summary?.toLowerCase().includes('pedestrian')
+      );
+    }
+
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       {/* Top Banner */}
@@ -108,6 +146,39 @@ export const VideoGalleryModule: React.FC = () => {
         </div>
       </div>
 
+      {/* Filter and Search Bar */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search recordings by object, date, or event..."
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+          />
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <Filter className="w-3.5 h-3.5 text-slate-400" />
+          <div className="flex items-center space-x-1 text-xs">
+            {(['all', 'hazard', 'vehicle', 'pedestrian'] as const).map(cat => (
+              <button
+                key={cat}
+                onClick={() => setFilterCategory(cat)}
+                className={`px-2.5 py-1 rounded-lg capitalize transition-colors ${
+                  filterCategory === cat
+                    ? 'bg-purple-600 text-white font-semibold'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                {cat === 'all' ? 'All Videos' : cat}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {statusMsg && (
         <div className="p-3 bg-emerald-950/60 border border-emerald-500/50 rounded-xl text-emerald-300 text-xs flex items-center space-x-2">
           <span>✓</span>
@@ -121,17 +192,19 @@ export const VideoGalleryModule: React.FC = () => {
           <div className="animate-spin rounded-full h-10 w-10 border-4 border-purple-500 border-t-transparent" />
           <p className="text-xs text-slate-400">Loading saved detection clips...</p>
         </div>
-      ) : videos.length === 0 ? (
+      ) : filteredVideos.length === 0 ? (
         <div className="py-16 bg-slate-900/50 border border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-6">
           <FileVideo className="w-12 h-12 text-slate-600 mb-3" />
           <h3 className="text-base font-semibold text-white">No Detection Recordings Found</h3>
           <p className="text-xs text-slate-400 max-w-sm mt-1">
-            Start the Live Camera and click "Start Recording" or trigger an automatic hazard detection event to save MP4 videos.
+            {searchQuery || filterCategory !== 'all'
+              ? 'No recordings match your current search/filter.'
+              : 'Start the Live Camera and click "Start Recording" or trigger an automatic hazard detection event to save MP4 videos.'}
           </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {videos.map(video => {
+          {filteredVideos.map(video => {
             const vehicleCount = (video.detected_objects || []).filter((o: any) =>
               ['car', 'motorcycle', 'bus', 'truck', 'vehicle'].includes((o.label || o.category || '').toLowerCase())
             ).length;

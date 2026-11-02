@@ -10,6 +10,7 @@ import videoRoutes from './routes/videos.js';
 import gpsRoutes from './routes/gps.js';
 import detectionRoutes from './routes/detection.js';
 import voiceRoutes from './routes/voice.js';
+import monitoringRoutes from './routes/monitoring.js';
 
 dotenv.config();
 
@@ -37,8 +38,11 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 app.use('/api/auth', authRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/gps', gpsRoutes);
+app.use('/api/location', gpsRoutes);
 app.use('/api/detection', detectionRoutes);
 app.use('/api/voice', voiceRoutes);
+app.use('/api/languages', voiceRoutes);
+app.use('/api/monitoring', monitoringRoutes);
 
 // Camera Session Management API
 app.post('/api/camera/session', (req, res) => {

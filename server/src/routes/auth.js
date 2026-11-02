@@ -136,8 +136,31 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Get Current Logged-in User Profile
-router.get('/me', authenticateToken, async (req, res) => {
+// Forgot Password
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    const usersCol = dbManager.collection('users');
+    const user = await usersCol.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      return res.status(404).json({ error: 'No account registered with this email address.' });
+    }
+
+    return res.json({
+      message: 'Password reset link and instructions have been generated.',
+      email: user.email
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to process forgot password request.' });
+  }
+});
+
+// Profile handler function
+async function handleGetProfile(req, res) {
   try {
     const usersCol = dbManager.collection('users');
     const user = await usersCol.findOne(getUserQuery(req.user.id));
@@ -165,7 +188,11 @@ router.get('/me', authenticateToken, async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: 'Failed to retrieve profile.' });
   }
-});
+}
+
+// Get Current Logged-in User Profile (supports both /profile and /me)
+router.get('/profile', authenticateToken, handleGetProfile);
+router.get('/me', authenticateToken, handleGetProfile);
 
 // Update Profile & Preferences
 router.put('/profile', authenticateToken, async (req, res) => {

@@ -31,49 +31,53 @@ router.get('/languages', (req, res) => {
   return res.json({ supported_languages: SUPPORTED_LANGUAGES });
 });
 
-router.get('/preferences', authenticateToken, async (req, res) => {
-  try {
-    const usersCol = dbManager.collection('users');
-    const user = await usersCol.findOne(getUserQuery(req.user.id));
-    if (!user) {
-      return res.status(404).json({ error: 'User not found.' });
-    }
-
-    return res.json({
-      preferred_languages: user.preferred_languages || ['en'],
-      default_language: user.default_language || 'en',
-      voice_settings: user.voice_settings || {
-        voice_output_enabled: true,
-        speech_rate: 1.0,
-        pitch: 1.0,
-        volume: 1.0,
-        selected_voice: ''
+router.all('/preferences', authenticateToken, async (req, res) => {
+  if (req.method === 'GET') {
+    try {
+      const usersCol = dbManager.collection('users');
+      const user = await usersCol.findOne(getUserQuery(req.user.id));
+      if (!user) {
+        return res.status(404).json({ error: 'User not found.' });
       }
-    });
-  } catch (err) {
-    return res.status(500).json({ error: 'Failed to retrieve voice preferences.' });
+
+      return res.json({
+        preferred_languages: user.preferred_languages || ['en'],
+        default_language: user.default_language || 'en',
+        voice_settings: user.voice_settings || {
+          voice_output_enabled: true,
+          speech_rate: 1.0,
+          pitch: 1.0,
+          volume: 1.0,
+          selected_voice: ''
+        }
+      });
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to retrieve voice preferences.' });
+    }
   }
-});
 
-router.put('/preferences', authenticateToken, async (req, res) => {
-  try {
-    const { preferred_languages, default_language, voice_settings } = req.body;
-    const usersCol = dbManager.collection('users');
+  if (req.method === 'PUT' || req.method === 'POST') {
+    try {
+      const { preferred_languages, default_language, voice_settings } = req.body;
+      const usersCol = dbManager.collection('users');
 
-    const updateObj = {};
-    if (Array.isArray(preferred_languages)) updateObj.preferred_languages = preferred_languages;
-    if (default_language) updateObj.default_language = default_language;
-    if (voice_settings) updateObj.voice_settings = voice_settings;
+      const updateObj = {};
+      if (Array.isArray(preferred_languages)) updateObj.preferred_languages = preferred_languages;
+      if (default_language) updateObj.default_language = default_language;
+      if (voice_settings) updateObj.voice_settings = voice_settings;
 
-    await usersCol.updateOne(getUserQuery(req.user.id), { $set: updateObj });
+      await usersCol.updateOne(getUserQuery(req.user.id), { $set: updateObj });
 
-    return res.json({
-      message: 'Multilingual preferences saved successfully in MongoDB',
-      preferences: updateObj
-    });
-  } catch (err) {
-    return res.status(500).json({ error: 'Failed to save voice preferences.' });
+      return res.json({
+        message: 'Multilingual preferences saved successfully in MongoDB',
+        preferences: updateObj
+      });
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to save voice preferences.' });
+    }
   }
+
+  return res.status(405).json({ error: 'Method not allowed' });
 });
 
 export default router;

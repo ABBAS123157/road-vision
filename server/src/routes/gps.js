@@ -4,8 +4,8 @@ import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Record device GPS update
-router.post('/update', authenticateToken, async (req, res) => {
+// Record device GPS update (supports both / and /update)
+router.post(['/', '/update'], authenticateToken, async (req, res) => {
   try {
     const { latitude, longitude, altitude, accuracy, speed, heading, timestamp } = req.body;
 
@@ -46,8 +46,8 @@ router.get('/history', authenticateToken, async (req, res) => {
   }
 });
 
-// Get latest position
-router.get('/latest', authenticateToken, async (req, res) => {
+// Get latest position (supports both /current and /latest)
+router.get(['/current', '/latest'], authenticateToken, async (req, res) => {
   try {
     const gpsCol = dbManager.collection('gps_logs');
     const latest = await (await gpsCol.find({ user_id: req.user.id })).sort({ created_at: -1 }).limit(1).toArray();
