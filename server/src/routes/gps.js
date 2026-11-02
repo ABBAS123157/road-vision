@@ -58,3 +58,4 @@ router.get('/latest', authenticateToken, async (req, res) => {
 });
 
 export default router;
+

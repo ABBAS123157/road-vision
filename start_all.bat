@@ -17,3 +17,4 @@ echo All services launched!
 echo Open your browser at: http://localhost:5173
 echo.
 pause
+
