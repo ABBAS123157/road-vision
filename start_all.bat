@@ -14,7 +14,9 @@ start "RoadVision React Frontend (Port 5173)" cmd /k "cd /d "%~dp0frontend" && n
 
 echo.
 echo All services launched!
-echo Open your browser at: http://localhost:5173
+echo Opening http://localhost:5173 in your default browser...
+timeout /t 3 /nobreak >nul
+start http://localhost:5173
 echo.
 pause
 

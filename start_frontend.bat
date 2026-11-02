@@ -3,12 +3,10 @@ echo ========================================================
 echo   ROADVISION AI - FRONTEND WEB APPLICATION
 echo ========================================================
 echo.
-echo For Laptop / Desktop Webcam:
-echo   --> Open http://localhost:5173 (Recommended)
-echo.
-echo For Mobile Phone Camera across Wi-Fi:
-echo   --> Open https://%COMPUTERNAME%:5173 or the Network HTTPS URL
+echo Launching React + Vite Frontend on http://localhost:5173...
 echo.
 cd /d "%~dp0frontend"
+timeout /t 2 /nobreak >nul
+start http://localhost:5173
 npm run dev -- --host
 pause

@@ -826,10 +826,10 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  window.location.href = `${window.location.protocol}//localhost:${window.location.port || '5173'}${window.location.pathname}`;
+                  window.location.href = `http://localhost:${window.location.port || '5173'}${window.location.pathname}`;
                 }}
                 className="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 rounded-lg text-white font-medium text-xs shadow transition-colors flex items-center space-x-1"
-                title="Switch to localhost on this computer for immediate webcam access"
+                title="Switch to http://localhost on this computer for immediate webcam access"
               >
                 <span>Switch to localhost</span>
               </button>

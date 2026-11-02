@@ -2,11 +2,13 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
+const plugins = [react()];
+if (process.env.VITE_SSL === 'true') {
+  plugins.push(basicSsl());
+}
+
 export default defineConfig({
-  plugins: [
-    react(),
-    basicSsl() // Generates automatic SSL/TLS certificate for full Camera & GPS support across mobile & laptops
-  ],
+  plugins,
   server: {
     port: 5173,
     host: true,
