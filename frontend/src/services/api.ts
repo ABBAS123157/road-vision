@@ -1,4 +1,4 @@
-const API_BASE = '/api';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '').replace(/\/$/, '') + '/api';
 
 export interface User {
   id: string | number;
@@ -509,6 +509,18 @@ export const api = {
 
   async getTrafficCongestion() {
     return safeFetchJson(`${API_BASE}/traffic/congestion`);
+  },
+
+  async getTrafficHotspots() {
+    return safeFetchJson(`${API_BASE}/traffic/hotspots`);
+  },
+
+  async getDetections(limit = 50) {
+    return safeFetchJson(`${API_BASE}/detections?limit=${limit}`);
+  },
+
+  async getDashboard() {
+    return safeFetchJson(`${API_BASE}/dashboard`);
   },
 
   async getEmergencyVehicles() {

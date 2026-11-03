@@ -22,11 +22,11 @@ export const TrafficModule: React.FC = () => {
   const loadData = async () => {
     try {
       const c = await api.getTrafficCounts();
-      setCounts(c);
+      setCounts(c || {});
       const cong = await api.getTrafficCongestion();
-      setCongestionList(cong);
-      const hs = await fetch('/api/traffic/hotspots').then(r => r.json());
-      setHotspots(hs);
+      setCongestionList(cong || []);
+      const hs = await api.getTrafficHotspots();
+      setHotspots(hs || []);
     } catch (e) {
       console.warn('Traffic data load error:', e);
     }
@@ -69,7 +69,7 @@ export const TrafficModule: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
           <p className="text-xs text-slate-400">Cumulative Counted</p>
           <p className="text-2xl font-black font-mono text-emerald-400 mt-0.5">
-            {counts.cumulative_counted?.Vehicle || 42}
+            {counts.cumulative_counted?.Vehicle || 0}
           </p>
           <span className="text-[11px] text-slate-400 font-medium">Unique ByteTrack IDs</span>
         </div>

@@ -113,3 +113,60 @@ def health_check():
         "ai_engine": "loaded" if ai.global_detector.model is not None else "degraded"
     }
 
+@app.get("/api/health")
+def api_health_check():
+    return health_check()
+
+# Direct Phase 3 Top-Level Endpoints
+from fastapi import UploadFile, File, Form, Depends, Query
+from sqlalchemy.orm import Session
+from .core.database import get_db
+from .models.models import AIDetectionEvent
+from .schemas.schemas import GPSLocationCreate, GPSLocationResponse
+
+@app.post("/api/detect/image")
+async def top_level_detect_image(
+    file: UploadFile = File(...),
+    latitude: float = Form(None),
+    longitude: float = Form(None),
+    db: Session = Depends(get_db)
+):
+    return await ai.detect_image(file=file, latitude=latitude, longitude=longitude, db=db)
+
+@app.post("/api/detect/video")
+async def top_level_detect_video(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    return await ai.detect_video(file=file, db=db)
+
+@app.get("/api/detections")
+def top_level_get_detections(limit: int = Query(50), db: Session = Depends(get_db)):
+    events = db.query(AIDetectionEvent).order_by(AIDetectionEvent.timestamp.desc()).limit(limit).all()
+    return {"total": len(events), "detections": events}
+
+@app.get("/api/dashboard")
+def top_level_get_dashboard(db: Session = Depends(get_db)):
+    events = db.query(AIDetectionEvent).all()
+    vehicles = sum(1 for e in events if e.object_category == "Vehicle")
+    pedestrians = sum(1 for e in events if e.object_category == "Pedestrian")
+    potholes = sum(1 for e in events if "pothole" in (e.label or "").lower())
+    hazards = sum(1 for e in events if e.object_category == "Road Damage")
+
+    recent = db.query(AIDetectionEvent).order_by(AIDetectionEvent.timestamp.desc()).limit(10).all()
+    return {
+        "total_events": len(events),
+        "total_videos": 0,
+        "total_video_duration_seconds": 0,
+        "vehicles_detected": vehicles,
+        "persons_detected": pedestrians,
+        "potholes_detected": potholes,
+        "hazards_detected": hazards,
+        "recent_activity": recent
+    }
+
+@app.post("/api/location", response_model=GPSLocationResponse)
+def top_level_post_location(loc: GPSLocationCreate, db: Session = Depends(get_db)):
+    return navigation.post_gps_location(loc=loc, db=db, current_user=None)
+
+

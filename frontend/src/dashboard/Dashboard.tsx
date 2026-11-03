@@ -92,21 +92,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateTab, currentUser
   }, []);
 
   const damageDistribution = [
-    { name: 'Potholes', value: Math.max(stats.potholes_detected, 12), color: '#EF4444' },
-    { name: 'Cracks', value: 24, color: '#F97316' },
-    { name: 'Waterlogging', value: 8, color: '#3B82F6' },
-    { name: 'Debris & Objects', value: Math.max(stats.hazards_detected, 6), color: '#EAB308' }
-  ];
+    { name: 'Potholes', value: stats.potholes_detected, color: '#EF4444' },
+    { name: 'Hazards & Defects', value: stats.hazards_detected, color: '#F97316' },
+    { name: 'Vehicles Monitored', value: stats.vehicles_detected, color: '#3B82F6' },
+    { name: 'Pedestrians', value: stats.persons_detected, color: '#22C55E' }
+  ].filter(d => d.value > 0);
 
-  const trafficActivity = [
-    { time: '08:00', vehicles: 45, pedestrians: 18, hazards: 2 },
-    { time: '10:00', vehicles: 78, pedestrians: 32, hazards: 4 },
-    { time: '12:00', vehicles: 92, pedestrians: 45, hazards: 3 },
-    { time: '14:00', vehicles: 64, pedestrians: 28, hazards: 1 },
-    { time: '16:00', vehicles: 115, pedestrians: 54, hazards: 6 },
-    { time: '18:00', vehicles: 140, pedestrians: 68, hazards: 5 },
-    { time: '20:00', vehicles: 85, pedestrians: 22, hazards: 2 }
-  ];
+  // Group real recent activity into timeline chart or display active events
+  const trafficActivity = stats.recent_activity && stats.recent_activity.length > 0
+    ? stats.recent_activity.slice(0, 7).map((act, idx) => ({
+        time: act.timestamp ? new Date(act.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : `T-${idx}`,
+        vehicles: act.object_label?.toLowerCase().includes('car') || act.object_label?.toLowerCase().includes('truck') ? 1 : 0,
+        pedestrians: act.object_label?.toLowerCase().includes('person') || act.object_label?.toLowerCase().includes('pedestrian') ? 1 : 0,
+        hazards: act.object_label?.toLowerCase().includes('pothole') || act.object_label?.toLowerCase().includes('crack') ? 1 : 0
+      }))
+    : [
+        { time: 'Live', vehicles: stats.vehicles_detected, pedestrians: stats.persons_detected, hazards: stats.hazards_detected + stats.potholes_detected }
+      ];
 
   return (
     <div className="space-y-6">
@@ -177,17 +179,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateTab, currentUser
             <div className="mt-4 space-y-2.5 text-xs">
               <div className="flex justify-between items-center">
                 <span className="text-slate-400">Full Name</span>
-                <span className="font-semibold text-white">{currentUser?.full_name || 'Inspector Rajesh Kumar'}</span>
+                <span className="font-semibold text-white">{currentUser?.full_name || 'Guest User'}</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-slate-400">Role</span>
                 <span className="px-2 py-0.5 bg-cyan-950 text-cyan-300 border border-cyan-800 rounded-md font-mono text-[11px]">
-                  {currentUser?.role || 'Road Safety Inspector'}
+                  {currentUser?.role || 'Guest / Unauthenticated'}
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-slate-400">Email</span>
-                <span className="font-mono text-slate-300">{currentUser?.email || 'inspector@roadvision.ai'}</span>
+                <span className="font-mono text-slate-300">{currentUser?.email || 'Not signed in'}</span>
               </div>
               {currentUser?.phone && (
                 <div className="flex justify-between items-center">
@@ -208,7 +210,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateTab, currentUser
             <span className="text-[11px] text-slate-500">Security: JWT Bearer + MongoDB</span>
             <div className="flex items-center space-x-1 text-emerald-400 text-xs">
               <Shield className="w-3.5 h-3.5" />
-              <span>Protected Session</span>
+              <span>{currentUser ? 'Protected Session' : 'Unauthenticated'}</span>
             </div>
           </div>
         </div>
@@ -233,20 +235,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigateTab, currentUser
             </div>
 
             <div className="mt-4 space-y-2.5 text-xs">
-              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1.5 font-mono">
-                <div className="flex justify-between text-cyan-400">
-                  <span>Latitude</span>
-                  <span>{latestGps?.latitude ? latestGps.latitude.toFixed(6) : '28.613939'}° N</span>
+              {latestGps ? (
+                <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-1.5 font-mono">
+                  <div className="flex justify-between text-cyan-400">
+                    <span>Latitude</span>
+                    <span>{latestGps.latitude.toFixed(6)}° N</span>
+                  </div>
+                  <div className="flex justify-between text-cyan-400">
+                    <span>Longitude</span>
+                    <span>{latestGps.longitude.toFixed(6)}° E</span>
+                  </div>
+                  <div className="flex justify-between text-slate-400 text-[11px]">
+                    <span>Accuracy</span>
+                    <span>±{Math.round(latestGps.accuracy_meters || 1)} meters</span>
+                  </div>
                 </div>
-                <div className="flex justify-between text-cyan-400">
-                  <span>Longitude</span>
-                  <span>{latestGps?.longitude ? latestGps.longitude.toFixed(6) : '77.209021'}° E</span>
+              ) : (
+                <div className="p-3 bg-slate-950/70 border border-dashed border-slate-800 rounded-xl text-center text-slate-400 text-xs py-4">
+                  <span>No GPS logged yet. Start Live Camera AI to broadcast device coordinates.</span>
                 </div>
-                <div className="flex justify-between text-slate-400 text-[11px]">
-                  <span>Accuracy</span>
-                  <span>±{Math.round(latestGps?.accuracy_meters || 4)} meters</span>
-                </div>
-              </div>
+              )}
 
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-400">Speed (GPS)</span>

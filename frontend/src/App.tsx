@@ -263,7 +263,7 @@ export const App: React.FC = () => {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-4 md:p-6 pb-24 lg:pb-8">
         {activeTab === 'dashboard' && (
           <Dashboard
             currentUser={currentUser}
@@ -287,6 +287,79 @@ export const App: React.FC = () => {
         {activeTab === 'weather' && <WeatherModule />}
         {activeTab === 'reports' && <ReportsModule />}
       </main>
+
+      {/* Mobile Sticky Bottom Navigation Bar (Phase 6 Mobile-First Redesign) */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 px-2 py-1.5 flex items-center justify-around shadow-2xl">
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('dashboard');
+            setMobileMenuOpen(false);
+          }}
+          className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all active:scale-95 ${
+            activeTab === 'dashboard' ? 'text-cyan-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Activity className="w-5 h-5" />
+          <span className="text-[10px] mt-0.5">Dashboard</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('camera');
+            setMobileMenuOpen(false);
+          }}
+          className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all active:scale-95 ${
+            activeTab === 'camera' ? 'text-cyan-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <div className="relative">
+            <Camera className="w-5 h-5" />
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+          </div>
+          <span className="text-[10px] mt-0.5">Camera AI</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('videos');
+            setMobileMenuOpen(false);
+          }}
+          className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all active:scale-95 ${
+            activeTab === 'videos' ? 'text-purple-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Video className="w-5 h-5" />
+          <span className="text-[10px] mt-0.5">Videos</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('navigation');
+            setMobileMenuOpen(false);
+          }}
+          className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all active:scale-95 ${
+            activeTab === 'navigation' ? 'text-blue-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Navigation className="w-5 h-5" />
+          <span className="text-[10px] mt-0.5">GPS Map</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className={`flex flex-col items-center justify-center py-1 px-2 rounded-xl transition-all active:scale-95 ${
+            mobileMenuOpen ? 'text-cyan-400 font-bold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {mobileMenuOpen ? <X className="w-5 h-5 text-cyan-400" /> : <Menu className="w-5 h-5" />}
+          <span className="text-[10px] mt-0.5">Modules</span>
+        </button>
+      </nav>
 
       {/* Footer */}
       <footer className="bg-slate-900/60 border-t border-slate-800/80 px-4 py-4 text-xs text-slate-500 text-center">

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Eye, Car, ShieldAlert, Hammer, RotateCcw, ZoomIn, ZoomOut, Compass } from 'lucide-react';
+import { api } from '../services/api';
 
 type TwinMode = 'inspection' | 'traffic' | 'safety' | 'construction';
 
@@ -8,11 +9,24 @@ export const DigitalTwin: React.FC = () => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [activeMode, setActiveMode] = useState<TwinMode>('inspection');
   const [telemetry, setTelemetry] = useState({
-    activeVehicles: 6,
-    inspectedPotholes: 3,
-    pedestriansAtRisk: 1,
-    constructionProgress: '65%'
+    activeVehicles: 0,
+    inspectedPotholes: 0,
+    pedestriansAtRisk: 0,
+    constructionProgress: '100% Verified'
   });
+
+  useEffect(() => {
+    api.getDashboardStats()
+      .then(stats => {
+        setTelemetry({
+          activeVehicles: stats.vehicles_detected || 0,
+          inspectedPotholes: stats.potholes_detected || 0,
+          pedestriansAtRisk: stats.persons_detected || 0,
+          constructionProgress: stats.potholes_detected > 0 ? 'Action Required' : 'Optimal Surface'
+        });
+      })
+      .catch(() => {});
+  }, []);
 
   // Scene references
   const sceneRef = useRef<THREE.Scene | null>(null);

@@ -51,6 +51,7 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const reconnectTimeoutRef = useRef<any>(null);
 
   // Camera State
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
@@ -223,7 +224,8 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/ws/live-detection`;
+    const defaultWsUrl = `${protocol}//${host}/ws/live-detection`;
+    const wsUrl = import.meta.env.VITE_WS_URL || defaultWsUrl;
 
     setWsStatus('connecting');
     const ws = new WebSocket(wsUrl);
@@ -315,6 +317,14 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
 
     ws.onclose = () => {
       setWsStatus('disconnected');
+      if (streamRef.current && !reconnectTimeoutRef.current) {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
+          if (streamRef.current) {
+            connectWebSocket();
+          }
+        }, 3000);
+      }
     };
 
     wsRef.current = ws;
@@ -395,6 +405,10 @@ export const LiveCamera: React.FC<LiveCameraProps> = ({
   };
 
   const stopCamera = () => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;

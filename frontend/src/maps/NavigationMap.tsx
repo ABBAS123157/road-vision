@@ -22,18 +22,88 @@ export const NavigationMap: React.FC = () => {
   const userMarkerRef = useRef<L.Marker | null>(null);
   const hazardMarkersRef = useRef<L.Marker[]>([]);
   const simIntervalRef = useRef<any>(null);
+  const watchIdRef = useRef<number | null>(null);
 
   // User Telemetry
-  const [userPos, setUserPos] = useState<[number, number]>([28.6139, 77.2090]); // Default New Delhi corridor
-  const [heading, setHeading] = useState<number>(45); // heading North-East
-  const [gpsSpeed, setGpsSpeed] = useState<number>(48.0);
+  const [userPos, setUserPos] = useState<[number, number]>([28.6139, 77.2090]);
+  const [heading, setHeading] = useState<number>(0);
+  const [gpsSpeed, setGpsSpeed] = useState<number>(0.0);
   const [roadType, setRoadType] = useState<string>('City Road');
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
+  const [gpsStatus, setGpsStatus] = useState<'acquiring' | 'locked' | 'denied' | 'unavailable'>('acquiring');
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+  const [gpsErrorMsg, setGpsErrorMsg] = useState<string | null>(null);
 
   // Speed Advisory & Hazards
   const [speedAdvisory, setSpeedAdvisory] = useState<SpeedAdvisory | null>(null);
   const [activeHazards, setActiveHazards] = useState<HazardAlert[]>([]);
   const [topAlert, setTopAlert] = useState<HazardAlert | null>(null);
+
+  // Real-time Geolocation tracking (Phase 5)
+  useEffect(() => {
+    if (!('geolocation' in navigator)) {
+      setGpsStatus('unavailable');
+      setGpsErrorMsg('Geolocation API is not supported by your browser.');
+      return;
+    }
+
+    setGpsStatus('acquiring');
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const spd = pos.coords.speed !== null ? Math.round(Math.max(0, pos.coords.speed * 3.6)) : 0;
+        const head = pos.coords.heading !== null ? Math.round(pos.coords.heading) : 0;
+        const acc = pos.coords.accuracy ? Math.round(pos.coords.accuracy) : null;
+
+        setUserPos([lat, lng]);
+        setGpsSpeed(spd);
+        if (head) setHeading(head);
+        setGpsAccuracy(acc);
+        setGpsStatus('locked');
+        setGpsErrorMsg(null);
+
+        updateUserPosition(lat, lng, head);
+
+        // Fetch advance road hazard guidance for actual location
+        fetchHazardsAndGuidance(lat, lng, head, spd);
+
+        // Sync to backend DB
+        api.sendGpsUpdate({
+          latitude: lat,
+          longitude: lng,
+          accuracy: acc ?? undefined,
+          speed: spd,
+          heading: head
+        }).catch(() => {});
+      },
+      (err) => {
+        if (err.code === 1) {
+          setGpsStatus('denied');
+          setGpsErrorMsg('Location permission denied. Please allow GPS access in your browser settings.');
+        } else if (err.code === 2) {
+          setGpsStatus('unavailable');
+          setGpsErrorMsg('GPS position unavailable. Check device location service.');
+        } else {
+          setGpsStatus('acquiring');
+          setGpsErrorMsg('Acquiring satellite lock...');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 1000
+      }
+    );
+
+    watchIdRef.current = watchId;
+
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+    };
+  }, []);
 
   // Initialize Leaflet Map
   useEffect(() => {
@@ -65,9 +135,6 @@ export const NavigationMap: React.FC = () => {
     const userMarker = L.marker(userPos, { icon: carIcon }).addTo(map);
     userMarkerRef.current = userMarker;
     mapRef.current = map;
-
-    // Fetch initial hazards & speed guidance
-    fetchHazardsAndGuidance(userPos[0], userPos[1], heading, gpsSpeed);
 
     return () => {
       if (simIntervalRef.current) clearInterval(simIntervalRef.current);
@@ -190,6 +257,41 @@ export const NavigationMap: React.FC = () => {
 
   return (
     <div className="space-y-4">
+      {/* GPS Status & Hardware Connection Banner */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div className="flex items-center space-x-3">
+          <div className={`p-2.5 rounded-xl ${
+            gpsStatus === 'locked' ? 'bg-emerald-500/20 text-emerald-400' :
+            gpsStatus === 'denied' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400 animate-pulse'
+          }`}>
+            <MapPin className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center space-x-2">
+              <h3 className="text-sm font-bold text-white">Live Device GPS Stream</h3>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                gpsStatus === 'locked' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' :
+                gpsStatus === 'denied' ? 'bg-red-950 text-red-400 border border-red-800' : 'bg-amber-950 text-amber-400 border border-amber-800'
+              }`}>
+                {gpsStatus === 'locked' ? 'GPS Locked' : gpsStatus === 'denied' ? 'Permission Denied' : 'Acquiring Signal...'}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5 font-mono">
+              {gpsStatus === 'locked'
+                ? `${userPos[0].toFixed(6)}° N, ${userPos[1].toFixed(6)}° E ${gpsAccuracy ? `(±${gpsAccuracy}m)` : ''}`
+                : gpsErrorMsg || 'Requesting browser location permission...'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-3 text-xs">
+          <div className="text-right hidden md:block">
+            <span className="text-slate-400 block text-[10px]">Heading Vector</span>
+            <span className="font-mono font-bold text-cyan-400">{heading}°</span>
+          </div>
+        </div>
+      </div>
+
       {/* 1-Kilometre Advance Hazard Alert Banner */}
       {topAlert && (
         <div
