@@ -1,0 +1,11 @@
+{
+  "name": "roadvision-ai",
+  "version": "2.0.0",
+  "private": true,
+  "description": "RoadVision AI - Smart Road Intelligence, Vehicle Safety & Monitoring Platform",
+  "scripts": {
+    "build": "cd frontend && npm install && npm run build",
+    "dev": "cd frontend && npm run dev",
+    "start": "cd frontend && npm run preview"
+  }
+}

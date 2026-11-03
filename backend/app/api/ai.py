@@ -241,6 +241,8 @@ async def websocket_live_detection(websocket: WebSocket):
             response_payload = {
                 "fps": fps,
                 "processing_time_ms": proc_time_ms,
+                "frame_width": frame.shape[1],
+                "frame_height": frame.shape[0],
                 "total_detected": len(detections),
                 "vehicles_count": vehicles_cnt,
                 "pedestrians_count": pedestrians_cnt,
@@ -262,4 +264,45 @@ async def websocket_live_detection(websocket: WebSocket):
         print(f"[RoadVision AI] WebSocket exception: {e}")
     finally:
         session_db.close()
+
+# HTTP Real-Time Detection for Clients without WebSocket
+@router.post("/detect/frame")
+async def detect_frame_base64(payload: dict):
+    image_b64 = payload.get("image")
+    if not image_b64:
+        raise HTTPException(status_code=400, detail="Missing base64 image")
+
+    start_time = time.time()
+    frame = decode_base64_image(image_b64)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Invalid base64 image")
+
+    detections, _ = global_detector.detect_frame(frame)
+    proc_time_ms = round((time.time() - start_time) * 1000, 1)
+
+    vehicles_cnt = sum(1 for d in detections if d.get("category") == "Vehicle")
+    pedestrians_cnt = sum(1 for d in detections if d.get("category") == "Pedestrian")
+    hazards_cnt = sum(1 for d in detections if d.get("category") == "Road Damage")
+    potholes_cnt = sum(1 for d in detections if d.get("label") == "Pothole")
+    emergency_cnt = sum(1 for d in detections if d.get("category") == "Emergency Vehicle")
+
+    prestart = evaluate_prestart_safety(detections, frame.shape[:2])
+
+    return {
+        "fps": round(1000.0 / max(1.0, proc_time_ms), 1),
+        "processing_time_ms": proc_time_ms,
+        "frame_width": frame.shape[1],
+        "frame_height": frame.shape[0],
+        "total_detected": len(detections),
+        "vehicles_count": vehicles_cnt,
+        "pedestrians_count": pedestrians_cnt,
+        "hazards_count": hazards_cnt,
+        "potholes_count": potholes_cnt,
+        "emergency_count": emergency_cnt,
+        "detections": detections,
+        "prestart_advisory": prestart["status"],
+        "prestart_details": prestart,
+        "status": "Detection Active",
+        "timestamp": datetime.utcnow().isoformat()
+    }
 

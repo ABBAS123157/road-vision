@@ -140,6 +140,10 @@ async def top_level_detect_video(
 ):
     return await ai.detect_video(file=file, db=db)
 
+@app.post("/api/detect/frame")
+async def top_level_detect_frame(payload: dict):
+    return await ai.detect_frame_base64(payload)
+
 @app.get("/api/detections")
 def top_level_get_detections(limit: int = Query(50), db: Session = Depends(get_db)):
     events = db.query(AIDetectionEvent).order_by(AIDetectionEvent.timestamp.desc()).limit(limit).all()

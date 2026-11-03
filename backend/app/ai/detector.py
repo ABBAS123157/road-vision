@@ -154,7 +154,27 @@ class RoadVisionAIDetector:
                 "attributes": {}
             }
 
-        return None
+        else:
+            # Map all other COCO classes (electronics, items, urban obstacles) so no objects are dropped
+            label = cls_name.replace('_', ' ').capitalize()
+            category = "Road / Urban Object"
+            if cls_name in ["dog", "cat", "horse", "cow", "sheep", "elephant", "bear", "zebra", "giraffe"]:
+                category = "Road Hazard / Animal"
+            elif cls_name in ["fire hydrant", "parking meter", "bench"]:
+                category = "Road Infrastructure"
+            elif cls_name in ["backpack", "umbrella", "handbag", "tie", "suitcase"]:
+                category = "Personal Item"
+            elif cls_name in ["cell phone", "laptop", "mouse", "remote", "keyboard", "tv"]:
+                category = "Equipment"
+
+            return {
+                "category": category,
+                "label": label,
+                "confidence": round(conf, 2),
+                "box": box,
+                "danger_level": "Safe",
+                "attributes": {"coco_class": cls_name}
+            }
 
     def _detect_road_damages(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """
