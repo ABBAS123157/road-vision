@@ -59,6 +59,8 @@ export interface RoadVideoRecord {
   date_time: string;
   duration: number;
   file_path: string;
+  stream_url?: string;
+  file_exists?: boolean;
   file_size_bytes: number;
   thumbnail_url?: string;
   trigger_event: string;
@@ -186,6 +188,8 @@ export interface WeatherData {
   timestamp: string;
 }
 
+import { localMediaStore } from './localMediaStore';
+
 // Token helper
 function getAuthHeader(): Record<string, string> {
   const token = localStorage.getItem('roadvision_jwt_token');
@@ -207,10 +211,14 @@ async function safeFetchJson(url: string, options?: RequestInit): Promise<any> {
   let data: any = null;
 
   if (text && text.trim().length > 0) {
+    // Check if server or Vercel SPA returned an HTML page (404/500/SPA redirect)
+    if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html') || text.trim().startsWith('<!doctype')) {
+      throw new Error(`API endpoint ${url} returned HTML. Backend is offline or running in client mode.`);
+    }
     try {
       data = JSON.parse(text);
     } catch {
-      data = { error: text };
+      throw new Error(`Invalid JSON response from server at ${url}`);
     }
   } else {
     data = {};
@@ -321,33 +329,111 @@ export const api = {
   },
 
   // ==========================================
-  // PHASE 5 & 6: Road Video Recording & Gallery (MongoDB)
+  // PHASE 5 & 6: Road Video Recording & Gallery (MongoDB + IndexedDB)
   // ==========================================
-  async uploadRoadVideo(formData: FormData): Promise<{ message: string; video: RoadVideoRecord }> {
-    return safeFetchJson(`${API_BASE}/videos/upload`, {
-      method: 'POST',
-      headers: { ...getAuthHeader() },
-      body: formData
-    });
+  async uploadRoadVideo(formData: FormData, videoBlob?: Blob): Promise<{ message: string; video: RoadVideoRecord }> {
+    let savedVideo: RoadVideoRecord | null = null;
+    let message = 'Road monitoring video saved successfully';
+
+    // 1. Always attempt backend MongoDB upload
+    try {
+      const res = await safeFetchJson(`${API_BASE}/videos/upload`, {
+        method: 'POST',
+        headers: { ...getAuthHeader() },
+        body: formData
+      });
+      if (res?.video) {
+        savedVideo = res.video;
+        message = res.message || message;
+      }
+    } catch (backendErr: any) {
+      console.warn('[API] Video backend upload note:', backendErr.message);
+    }
+
+    // 2. Synthesize or enrich record for offline / browser storage
+    if (!savedVideo) {
+      const videoId = 'local_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      let detectedObjects: any[] = [];
+      try {
+        const rawDets = formData.get('detected_objects');
+        if (typeof rawDets === 'string') detectedObjects = JSON.parse(rawDets);
+      } catch {}
+
+      savedVideo = {
+        video_id: videoId,
+        user_id: String(api.getStoredUser()?.id || 'guest_user'),
+        user_email: api.getStoredUser()?.email || 'guest@roadvision.ai',
+        date_time: new Date().toISOString(),
+        duration: parseFloat(formData.get('duration') as string) || 0,
+        file_path: videoBlob ? URL.createObjectURL(videoBlob) : '',
+        file_size_bytes: videoBlob ? videoBlob.size : 0,
+        thumbnail_url: (formData.get('thumbnail_base64') as string) || null,
+        trigger_event: (formData.get('trigger_event') as string) || 'manual',
+        gps: {
+          latitude: parseFloat(formData.get('gps_lat') as string) || null,
+          longitude: parseFloat(formData.get('gps_lng') as string) || null,
+          accuracy_meters: parseFloat(formData.get('gps_accuracy') as string) || null,
+        },
+        detected_objects: detectedObjects,
+        detection_summary: (formData.get('detection_summary') as string) || `${detectedObjects.length} objects detected`,
+        created_at: new Date().toISOString()
+      };
+    }
+
+    // 3. Save to local IndexedDB store
+    if (videoBlob && savedVideo) {
+      await localMediaStore.saveVideo(savedVideo, videoBlob);
+    }
+
+    return { message, video: savedVideo };
   },
 
   async getSavedVideos(): Promise<{ total: number; videos: RoadVideoRecord[] }> {
-    return safeFetchJson(`${API_BASE}/videos`, {
-      headers: { ...getAuthHeader() }
-    });
+    const localVideos = await localMediaStore.getAllVideos();
+    try {
+      const data = await safeFetchJson(`${API_BASE}/videos`, {
+        headers: { ...getAuthHeader() }
+      });
+      if (data && Array.isArray(data.videos)) {
+        // Merge server and local videos, avoiding duplicates by video_id
+        const seen = new Set(data.videos.map((v: RoadVideoRecord) => v.video_id));
+        const merged = [...data.videos];
+        localVideos.forEach(lv => {
+          if (!seen.has(lv.video_id)) {
+            merged.push(lv);
+            seen.add(lv.video_id);
+          }
+        });
+        return { total: merged.length, videos: merged };
+      }
+    } catch (err: any) {
+      console.warn('[API] Could not fetch server videos, using local store:', err.message);
+    }
+    return { total: localVideos.length, videos: localVideos };
   },
 
   async getVideoById(videoId: string): Promise<RoadVideoRecord> {
-    return safeFetchJson(`${API_BASE}/videos/${videoId}`, {
-      headers: { ...getAuthHeader() }
-    });
+    try {
+      return await safeFetchJson(`${API_BASE}/videos/${videoId}`, {
+        headers: { ...getAuthHeader() }
+      });
+    } catch {
+      const localVideos = await localMediaStore.getAllVideos();
+      const match = localVideos.find(v => v.video_id === videoId);
+      if (match) return match;
+      throw new Error('Video not found.');
+    }
   },
 
   async deleteVideo(videoId: string): Promise<{ message: string }> {
-    return safeFetchJson(`${API_BASE}/videos/${videoId}`, {
-      method: 'DELETE',
-      headers: { ...getAuthHeader() }
-    });
+    await localMediaStore.deleteVideo(videoId);
+    try {
+      await safeFetchJson(`${API_BASE}/videos/${videoId}`, {
+        method: 'DELETE',
+        headers: { ...getAuthHeader() }
+      });
+    } catch {}
+    return { message: 'Video deleted successfully' };
   },
 
   // ==========================================
@@ -361,17 +447,25 @@ export const api = {
     speed?: number;
     heading?: number;
   }) {
-    return safeFetchJson(`${API_BASE}/gps/update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-      body: JSON.stringify(coords)
-    });
+    try {
+      return await safeFetchJson(`${API_BASE}/gps/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify(coords)
+      });
+    } catch {
+      return { success: true, mode: 'local' };
+    }
   },
 
   async getGpsHistory(limit = 100): Promise<{ total: number; points: GpsLogPoint[] }> {
-    return safeFetchJson(`${API_BASE}/gps/history?limit=${limit}`, {
-      headers: { ...getAuthHeader() }
-    });
+    try {
+      return await safeFetchJson(`${API_BASE}/gps/history?limit=${limit}`, {
+        headers: { ...getAuthHeader() }
+      });
+    } catch {
+      return { total: 0, points: [] };
+    }
   },
 
   async getLatestGps(): Promise<GpsLogPoint | null> {
@@ -385,7 +479,7 @@ export const api = {
   },
 
   // ==========================================
-  // PHASE 7 & 8: Detection Events & Dashboard Stats (MongoDB)
+  // PHASE 7 & 8: Detection Events & Dashboard Stats (MongoDB + Local Fallback)
   // ==========================================
   async recordDetectionEvent(eventData: {
     event_type: string;
@@ -397,23 +491,62 @@ export const api = {
     severity?: string;
     details?: any;
   }) {
-    return safeFetchJson(`${API_BASE}/detection/event`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-      body: JSON.stringify(eventData)
-    });
+    // Record locally
+    const localRecord: DetectionEventRecord = {
+      event_id: 'ev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      user_id: String(api.getStoredUser()?.id || 'guest'),
+      event_type: eventData.event_type,
+      object_label: eventData.object_label,
+      confidence: eventData.confidence,
+      tracking_id: eventData.tracking_id,
+      severity: eventData.severity || 'info',
+      gps: {
+        latitude: eventData.gps_lat || null,
+        longitude: eventData.gps_lng || null
+      },
+      details: eventData.details,
+      timestamp: new Date().toISOString()
+    };
+    localMediaStore.saveDetectionEvent(localRecord);
+
+    try {
+      return await safeFetchJson(`${API_BASE}/detection/event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify(eventData)
+      });
+    } catch {
+      return { message: 'Detection recorded locally', event: localRecord };
+    }
   },
 
   async getDetectionHistory(limit = 50): Promise<{ total: number; events: DetectionEventRecord[] }> {
-    return safeFetchJson(`${API_BASE}/detection/history?limit=${limit}`, {
-      headers: { ...getAuthHeader() }
-    });
+    try {
+      const data = await safeFetchJson(`${API_BASE}/detection/history?limit=${limit}`, {
+        headers: { ...getAuthHeader() }
+      });
+      if (data && Array.isArray(data.events)) return data;
+    } catch {}
+    const localDets = localMediaStore.getLocalDetections().slice(0, limit);
+    return { total: localDets.length, events: localDets };
   },
 
   async getDashboardStats(): Promise<DashboardStats> {
-    return safeFetchJson(`${API_BASE}/detection/stats`, {
-      headers: { ...getAuthHeader() }
-    });
+    try {
+      const data = await safeFetchJson(`${API_BASE}/dashboard`, {
+        headers: { ...getAuthHeader() }
+      });
+      if (data && typeof data.total_events === 'number') return data;
+    } catch {}
+
+    try {
+      const data2 = await safeFetchJson(`${API_BASE}/detection/stats`, {
+        headers: { ...getAuthHeader() }
+      });
+      if (data2 && typeof data2.total_events === 'number') return data2;
+    } catch {}
+
+    return localMediaStore.getLocalDashboardStats();
   },
 
   // ==========================================

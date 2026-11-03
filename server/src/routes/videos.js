@@ -5,7 +5,7 @@ import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
 import { dbManager } from '../db.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,7 +37,7 @@ const upload = multer({
 });
 
 // Upload Video Endpoint
-router.post('/upload', authenticateToken, upload.single('video'), async (req, res) => {
+router.post('/upload', optionalAuth, upload.single('video'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No video file provided.' });
@@ -57,13 +57,17 @@ router.post('/upload', authenticateToken, upload.single('video'), async (req, re
       detected_objects = '[]',
       detection_summary = '',
       trigger_event = 'manual',
-      thumbnail_base64
+      thumbnail_base64,
+      user_id,
+      user_email
     } = req.body;
 
     const videoId = uuidv4();
-    const userId = req.user.id;
+    const userId = req.user?.id || user_id || 'guest_user';
+    const email = req.user?.email || user_email || 'guest@roadvision.ai';
     const filename = req.file.filename;
     const fileUrl = `/uploads/videos/${filename}`;
+    const streamUrl = `/api/videos/stream/${videoId}`;
 
     // Handle thumbnail
     let thumbnailUrl = null;
@@ -89,10 +93,11 @@ router.post('/upload', authenticateToken, upload.single('video'), async (req, re
     const videoRecord = {
       video_id: videoId,
       user_id: userId,
-      user_email: req.user.email,
+      user_email: email,
       date_time: new Date().toISOString(),
       duration: parseFloat(duration) || 0,
       file_path: fileUrl,
+      stream_url: streamUrl,
       file_size_bytes: req.file.size,
       thumbnail_url: thumbnailUrl,
       trigger_event: trigger_event,
@@ -119,14 +124,78 @@ router.post('/upload', authenticateToken, upload.single('video'), async (req, re
   }
 });
 
-// Get Videos for Current User
-router.get('/', authenticateToken, async (req, res) => {
+// Stream Video by Video ID with full Range header support
+router.get('/stream/:id', async (req, res) => {
   try {
     const videosCol = dbManager.collection('road_videos');
-    const userVideos = await (await videosCol.find({ user_id: req.user.id })).sort({ created_at: -1 }).toArray();
+    const video = await videosCol.findOne({ video_id: req.params.id });
+    if (!video || !video.file_path) {
+      return res.status(404).json({ error: 'Video record not found.' });
+    }
+
+    const filename = path.basename(video.file_path);
+    const filePath = path.join(VIDEOS_DIR, filename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Video file not found on disk: ' + filename });
+    }
+
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = end - start + 1;
+      const file = fs.createReadStream(filePath, { start, end });
+      const head = {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': 'video/mp4',
+      };
+      res.writeHead(206, head);
+      file.pipe(res);
+    } else {
+      const head = {
+        'Content-Length': fileSize,
+        'Content-Type': 'video/mp4',
+        'Accept-Ranges': 'bytes',
+      };
+      res.writeHead(200, head);
+      fs.createReadStream(filePath).pipe(res);
+    }
+  } catch (err) {
+    console.error('Streaming error:', err);
+    return res.status(500).json({ error: 'Streaming error: ' + err.message });
+  }
+});
+
+// Get Videos for Current User / Guests
+router.get('/', optionalAuth, async (req, res) => {
+  try {
+    const videosCol = dbManager.collection('road_videos');
+    const allVideos = await (await videosCol.find({})).sort({ created_at: -1 }).toArray();
+
+    // Verify whether file actually exists on server disk and annotate
+    const enriched = allVideos.map(v => {
+      let fileExists = false;
+      if (v.file_path) {
+        const fn = path.basename(v.file_path);
+        fileExists = fs.existsSync(path.join(VIDEOS_DIR, fn));
+      }
+      return {
+        ...v,
+        file_exists: fileExists,
+        stream_url: v.stream_url || `/api/videos/stream/${v.video_id}`
+      };
+    });
+
     return res.json({
-      total: userVideos.length,
-      videos: userVideos
+      total: enriched.length,
+      videos: enriched
     });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to retrieve videos.' });
@@ -134,12 +203,12 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // Get Video by ID
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const videosCol = dbManager.collection('road_videos');
-    const video = await videosCol.findOne({ video_id: req.params.id, user_id: req.user.id });
+    const video = await videosCol.findOne({ video_id: req.params.id });
     if (!video) {
-      return res.status(404).json({ error: 'Video not found or access denied.' });
+      return res.status(404).json({ error: 'Video not found.' });
     }
     return res.json(video);
   } catch (err) {
@@ -148,12 +217,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Delete Video
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', optionalAuth, async (req, res) => {
   try {
     const videosCol = dbManager.collection('road_videos');
-    const video = await videosCol.findOne({ video_id: req.params.id, user_id: req.user.id });
+    const video = await videosCol.findOne({ video_id: req.params.id });
     if (!video) {
-      return res.status(404).json({ error: 'Video not found or access denied.' });
+      return res.status(404).json({ error: 'Video not found.' });
     }
 
     // Remove video file from disk

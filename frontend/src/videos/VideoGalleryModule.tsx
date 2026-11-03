@@ -22,16 +22,52 @@ import {
   Filter
 } from 'lucide-react';
 import { api, RoadVideoRecord } from '../services/api';
+import { localMediaStore } from '../services/localMediaStore';
 
 export const VideoGalleryModule: React.FC = () => {
   const [videos, setVideos] = useState<RoadVideoRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedVideo, setSelectedVideo] = useState<RoadVideoRecord | null>(null);
+  const [activeVideoSrc, setActiveVideoSrc] = useState<string>('');
+  const [videoLoadError, setVideoLoadError] = useState<boolean>(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState<'all' | 'hazard' | 'vehicle' | 'pedestrian'>('all');
+
+  const openVideoModal = async (video: RoadVideoRecord) => {
+    setSelectedVideo(video);
+    setVideoLoadError(false);
+    
+    // Check if we have an in-memory blob or local indexedDB blob
+    if (video.file_path && (video.file_path.startsWith('blob:') || video.file_path.startsWith('data:'))) {
+      setActiveVideoSrc(video.file_path);
+      return;
+    }
+
+    // Try local IndexedDB blob first for fast, reliable playback
+    const localBlob = await localMediaStore.getVideoBlob(video.video_id);
+    if (localBlob) {
+      setActiveVideoSrc(URL.createObjectURL(localBlob));
+      return;
+    }
+
+    // Fallback to server file_path or stream_url
+    setActiveVideoSrc(video.stream_url || video.file_path || '');
+  };
+
+  const handleVideoError = async () => {
+    if (!selectedVideo) return;
+    // Attempt rescue from IndexedDB if not already tried
+    const blob = await localMediaStore.getVideoBlob(selectedVideo.video_id);
+    if (blob && !activeVideoSrc.startsWith('blob:')) {
+      setActiveVideoSrc(URL.createObjectURL(blob));
+      setVideoLoadError(false);
+    } else {
+      setVideoLoadError(true);
+    }
+  };
 
   const fetchVideos = async () => {
     setLoading(true);
@@ -223,7 +259,7 @@ export const VideoGalleryModule: React.FC = () => {
               >
                 {/* Thumbnail / Video header */}
                 <div
-                  onClick={() => setSelectedVideo(video)}
+                  onClick={() => openVideoModal(video)}
                   className="relative aspect-video bg-slate-950 cursor-pointer overflow-hidden flex items-center justify-center"
                 >
                   {video.thumbnail_url ? (
@@ -309,7 +345,7 @@ export const VideoGalleryModule: React.FC = () => {
 
                     <div className="flex items-center space-x-2">
                       <a
-                        href={video.file_path}
+                        href={video.stream_url || video.file_path}
                         download={`road_video_${video.video_id}.mp4`}
                         className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors"
                         title="Download MP4"
@@ -388,13 +424,28 @@ export const VideoGalleryModule: React.FC = () => {
             </div>
 
             {/* Video Player */}
-            <div className="bg-black aspect-video w-full flex items-center justify-center">
-              <video
-                src={selectedVideo.file_path}
-                controls
-                autoPlay
-                className="w-full h-full object-contain"
-              />
+            <div className="bg-black aspect-video w-full flex items-center justify-center relative">
+              {videoLoadError ? (
+                <div className="flex flex-col items-center justify-center p-6 text-center text-slate-400 space-y-3">
+                  <div className="p-4 bg-red-950/50 border border-red-500/40 rounded-2xl text-red-400">
+                    <FileVideo className="w-10 h-10 mx-auto mb-2 text-red-400" />
+                    <p className="font-semibold text-sm text-white">Video file not found in storage</p>
+                    <p className="text-xs text-slate-400 mt-1 max-w-md">
+                      The video binary file is not available on this server or origin.
+                      All detection telemetry, GPS coordinates, and event logs are safely preserved below.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <video
+                  key={activeVideoSrc || selectedVideo.video_id}
+                  src={activeVideoSrc || selectedVideo.stream_url || selectedVideo.file_path}
+                  controls
+                  autoPlay
+                  onError={handleVideoError}
+                  className="w-full h-full object-contain"
+                />
+              )}
             </div>
 
             {/* Video Telemetry breakdown */}

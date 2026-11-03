@@ -26,6 +26,13 @@ class LocalCollection {
     const data = this.getDb()[this.name] || [];
     const filtered = data.filter(item => {
       for (const key of Object.keys(query)) {
+        if (key === '$or' && Array.isArray(query.$or)) {
+          const matchOr = query.$or.some(subQ => {
+            return Object.keys(subQ).every(k => item[k] === subQ[k]);
+          });
+          if (!matchOr) return false;
+          continue;
+        }
         if (query[key] !== undefined && item[key] !== query[key]) {
           return false;
         }
